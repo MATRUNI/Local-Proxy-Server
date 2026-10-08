@@ -1,34 +1,8 @@
 Name: namesind
 Server it listening to 127.0.0.1:4000
-FULL BUFFER: GET http://example.com/ HTTP/1.1
-Host: example.com
-User-Agent: curl/8.18.0
-Accept: */*
-Proxy-Connection: Keep-Alive
-
-
+GET http://httpbin.org/get HTTP/1.1
 Connected
-1
-2
-3
-4
-5
-Response buffer: 
-HTTP/1.1 200 OK\r\n
-Date: Wed, 07 Oct 2026 17:24:09 GMT\r\n
-Content-Type: text/html; charset=utf-8\r\n
-Transfer-Encoding: chunked\r\n
-Connection: keep-alive\r\n
-Server: cloudflare\r\n
-Last-Modified: Fri, 02 Oct 2026 16:11:02 GMT\r\n
-Allow: GET, HEAD\r\n
-Accept-Ranges: bytes\r\n
-Age: 4327\r\n
-cf-cache-status: HIT\r\n
-CF-RAY: a46e99045aa191c8-DEL\r\n
-alt-svc: h3=":443"; ma=86400\r\n
-\r\n
-241\r\n
-<!doctype html><html lang=en><head><meta charset=utf-8><link rel=icon href=data:,><meta name=viewport content="width=device-width,initial-scale=1"><title>Example Domain</title><style>html{color-scheme:light dark;background:light-dark(#eee,#222)}body{font:16px/1.6 system-ui,sans-serif;max-width:26em;margin:auto;padding:25vh 2em 2em;text-align:center}</style></head><body><p>This domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes.</p><script src=/s.js></script></body></html>\n
-\r\n
-body: -1
+Client disconnected.
+GET http://httpbin.org/get HTTP/1.1
+Connected
+Client disconnected.
