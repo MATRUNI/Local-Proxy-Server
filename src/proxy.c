@@ -10,6 +10,7 @@
 #include "http.h"
 #include "server.h"
 
+#define BUFFER_SIZE     (65536)
 #define MAX_HEADER_SIZE (65536)
 
 int connectToDNS(struct addrinfo *adr)
@@ -50,13 +51,11 @@ int make_api_call(const char *host, const char *port)
     if(status!=0) return -1;
 
     int server_fd=connectToDNS(adr);
-    printf("1\n");
     if(server_fd==-1)
     {
         freeaddrinfo(adr);
         return -1;
     }
-    printf("2\n");
 
     freeaddrinfo(adr);
     return server_fd;
@@ -68,7 +67,7 @@ int send_all(int fd,const char *buffer, size_t total)
 
     while (1)
     {
-        int sent = send(fd, buffer + s, total - s, 0);
+        ssize_t sent = send(fd, buffer + s, total - s, 0);
 
         if (sent == -1)
         {
@@ -130,6 +129,25 @@ char *strstr_case_insensitive(const char *haystack, const char *needle)
     return NULL;
 }
 
+long parse_chunk_size(char *buffer, char **end)
+{
+    if(buffer==NULL) return -1;
+    char *p;
+    long n = strtol(buffer,&p,16);
+    if(*p!='\r') return -1;
+    *end=p;
+    return n;
+}
+
+int chunk_available(char *buffer, size_t total,char *size_end, long chunk_size)
+{
+    if(buffer==NULL || size_end==NULL) return 0;
+    char *body = size_end+2;
+    char *chunk_end = body + chunk_size;
+    if(chunk_end - buffer <=total) return 1;
+    return 0;
+}
+
 long find_capacity(char *buffer)
 {
     char *cl = strstr_case_insensitive(buffer,"\r\nContent-Length");
@@ -148,7 +166,8 @@ long find_capacity(char *buffer)
     if(*end!='\r') return -1;
     return len;
 }
-int find_encoding(char *buffer,char *start)
+
+int find_encoding(char *buffer,char **start)
 {
     char *cl = strstr_case_insensitive(buffer,"\r\nTransfer-Encoding");
     if(cl==NULL) return -1;
@@ -166,33 +185,13 @@ int find_encoding(char *buffer,char *start)
 
 int receiveHTTPResponse(int server_fd, int client_fd)
 {
-    char *buffer = malloc(4096);
+    size_t capacity = BUFFER_SIZE;
+    char *buffer = malloc(capacity);
     if(buffer==NULL) return 1;
-    size_t total=0;
-    size_t capacity=4096;
 
-    char *headers_end = NULL;
-
-    while(headers_end==NULL)
+    while(1)
     {
-        if(total >=capacity-1)
-        {
-            capacity*=2;
-            if(capacity>MAX_HEADER_SIZE)
-            {
-                printf("ERROR: Header too large.\n");
-                free(buffer);
-                return 1;
-            }
-            char * new_buf = realloc(buffer,capacity);
-            if(new_buf==NULL)
-            {
-                free(buffer);
-                return 1;
-            }
-            buffer=new_buf;
-        }
-        int n = recv(server_fd,buffer+total, capacity-total-1,0);
+        ssize_t n = recv(server_fd,buffer, capacity,0);
         if(n==-1)
         {
             perror("recv");
@@ -201,69 +200,13 @@ int receiveHTTPResponse(int server_fd, int client_fd)
             return 1;
         }
         if (n == 0) break;
-        total+=n;
-        buffer[total]='\0';
-        headers_end = strstr(buffer,"\r\n\r\n");
-    }
-    printf("Response buffer: \n");
-    size_t w=0;
-    while(w<total)
-    {
-        if (buffer[w] == '\r')
-            printf("\\r");
-        else if (buffer[w] == '\n')
-            printf("\\n\n");
-        else
-            printf("%c", buffer[w]);
-        w++;
-    }
-    long len = find_capacity(buffer);
-    printf("body: %ld\n",len);
-    if(len==-1)
-    {
-        free(buffer);
-        close(server_fd);
-        return 1;
-    }
-    headers_end+=4;
-    size_t body_size = strlen(headers_end);
-    long remaining_body = len - body_size;
-    if(send_all(client_fd,buffer,total)==1)
-    {
-        free(buffer);
-        close(server_fd);
-        return 1;
-    }
-    while (remaining_body>0)
-    {
-        int n;
-        if(remaining_body>=capacity)
-        n = recv(server_fd,buffer, capacity,0);
-        else
-        n = recv(server_fd,buffer, remaining_body,0);
-
-        if(n==-1)
-        {
-            perror("recv");
-            close(server_fd);
-            free(buffer);
-            return 1;
-        }
-        remaining_body-=n;
-        if (n == 0 && remaining_body>0) break;
 
         if(send_all(client_fd,buffer,n)==1)
         {
-            close(server_fd);
             free(buffer);
+            close(server_fd);
             return 1;
         }
-    }
-    if(remaining_body>0)
-    {
-        free(buffer);
-        close(server_fd);
-        return 1;
     }
     free(buffer);
     close(server_fd);
@@ -320,13 +263,13 @@ int proxy_handle_client(int client_fd)
         }
     }
     struct http_request req={0};
-    printf("FULL BUFFER: %s\n",buffer);
     if(parse_request(buffer,&req)==1)
     {
         free(buffer);
         printf("Invalid request.\n");
         return 1;
     }
+    printf("%s %s %s\n",req.method,req.path,req.version);
     struct http_url url={0};
     if(parse_url(req.path,&url)==1)
     {
@@ -337,7 +280,6 @@ int proxy_handle_client(int client_fd)
     }
 
     int server_fd = make_api_call(url.host,url.port);
-    printf("3\n");
     if(server_fd==-1)
     {
         free_request(&req);
@@ -345,7 +287,6 @@ int proxy_handle_client(int client_fd)
         free(buffer);
         return 1;
     }
-    printf("4\n");
     
     if(sendHTTPRequest(server_fd,&req,&url)==1)
     {
@@ -355,7 +296,6 @@ int proxy_handle_client(int client_fd)
         close(server_fd);
         return 1;
     }
-    printf("5\n");
     
     if(receiveHTTPResponse(server_fd,client_fd)==1)
     {
