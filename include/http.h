@@ -32,7 +32,11 @@ struct http_response {
     struct http_headers headers;
 };
 
+int parse_headers(char *buffer,struct http_headers *headers);
+
 int parse_request(char *buffer,struct http_request *req);
+
+void free_headers(struct http_headers *headers);
 
 void free_request(struct http_request *req);
 
