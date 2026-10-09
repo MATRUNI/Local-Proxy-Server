@@ -1,8 +1,0 @@
-Name: namesind
-Server it listening to 127.0.0.1:4000
-GET http://httpbin.org/get HTTP/1.1
-Connected
-Client disconnected.
-GET http://httpbin.org/get HTTP/1.1
-Connected
-Client disconnected.
