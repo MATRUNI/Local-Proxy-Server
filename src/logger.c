@@ -2,15 +2,16 @@
 #include "logger.h"
 #include <stdarg.h>
 
-int init_logger(FILE **logger)
+static FILE * logger = NULL;
+
+int init_logger()
 {
-    if(logger==NULL) return 1;
-    if(logger!=NULL && *logger!=NULL)
+    if(logger!=NULL)
     {
         return 0;
     }
-    *logger = fopen("logs/logger.log","a+");
-    if(*logger==NULL)
+    logger = fopen("logs/logger.log","a+");
+    if(logger==NULL)
     {
         perror("fopen");
         printf("Failed to open file.\n");
@@ -19,7 +20,7 @@ int init_logger(FILE **logger)
     return 0;
 }
 
-int write_log(FILE *logger,const char *line,...)
+int write_log(const char *line,...)
 {
     if(logger==NULL || line==NULL) 
     {
@@ -47,7 +48,7 @@ int write_log(FILE *logger,const char *line,...)
     return 1;
 }
 
-int get_logs(FILE *logger)
+int get_logs()
 {
     if(logger==NULL) return 1;
     rewind(logger);
@@ -61,12 +62,12 @@ int get_logs(FILE *logger)
     return 0;
 }
 
-int close_logger(FILE **logger)
+int close_logger()
 {
-    if(logger!=NULL && *logger!=NULL)
+    if(logger!=NULL)
     {
-        int close_response = fclose(*logger);
-        *logger=NULL;
+        int close_response = fclose(logger);
+        logger=NULL;
         if(close_response==EOF)
         {
             return 1;
@@ -75,26 +76,18 @@ int close_logger(FILE **logger)
     return 0;
 }
 
-int clear_logger(FILE **logger)
+int clear_logger()
 {
-    int res_close_logger = close_logger(logger);
-    
-    FILE *temp = fopen("logs/logger.log","w");
-    if(temp==NULL)
-    {
-        perror("fopen clear");
-        return 1;
-    }
-    if(res_close_logger==1)
-    {
-        if(write_log(temp,"Closing previous logger instance failed.")==1)
-        {
-            return 1;
-        }
-    }
-    if(close_logger(&temp)==1)
+    if(logger==NULL) return 1;
+    logger = freopen("logs/logger.log","w",logger);
+    if(logger==NULL)
     {
         return 1;
     }
-    return init_logger(logger);
+    logger = freopen("logs/logger.log","a+",logger);
+    if(logger==NULL)
+    {
+        return init_logger();
+    }
+    return 0;
 }

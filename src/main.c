@@ -12,14 +12,11 @@
 
 int main(int argc,char *argv[])
 {
-    FILE *logger = NULL;
     setbuf(stdout, NULL);
     int port=1777;
-    // int logger_active=0;
-    if(init_logger(&logger)==1)
+    if(init_logger()==1)
     {
-        printf("Logger initialization failed.\n");
-        // logger_active=1;
+        printf("Failed to initialise logger.\n");
     }
     for(int i=1;i<argc;i++)
     {
@@ -31,8 +28,8 @@ int main(int argc,char *argv[])
                 long value=strtol(argv[++i],&end,10);
                 if(*end!='\0' || value<1 || value>65535)
                 {
-                    write_log(logger,"Invalid port.");
-                    close_logger(&logger);
+                    write_log("Invalid port.");
+                    close_logger();
                     return 1;
                 }
                 port = (int)value;
@@ -47,7 +44,7 @@ int main(int argc,char *argv[])
         }
         else if (strcasecmp(argv[i],"logs")==0)
         {
-            if(get_logs(logger)==1)
+            if(get_logs()==1)
             {
                 printf("Error while retrieving logs.\n");
                 return 1;
@@ -56,20 +53,21 @@ int main(int argc,char *argv[])
         }
         else
         {
-            write_log(logger,"Invalid arguments.");
-            close_logger(&logger);
+            write_log("Invalid arguments.");
+            close_logger();
             return 1;
         }    
     }
     int reuse=1;
-    write_log(logger,"Server it listening to 127.0.0.1:%d",port);
-    
+
     struct proxy_server server={0};
-    setsockopt(server.listen_fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));
     if(server_init(&server,port)==1)
     {
         return 1;   
     }
+    setsockopt(server.listen_fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));
+
+    write_log("Server it listening to 127.0.0.1:%d",port);
     while(1)
     {
         int client_fd = server_accept(&server);
