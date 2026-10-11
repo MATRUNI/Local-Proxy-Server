@@ -137,7 +137,6 @@ int send_headers(int fd,const char *buffer, char *headers_end ,size_t total)
         if( headers.items[i].name !=NULL)
         {
             const char *value = headers.items[i].value;
-            int replace_value=0;
             int temp;
             // Case-insensitive check for the "Connection" header
             if(strcasecmp(headers.items[i].name,"connection")==0)
@@ -215,7 +214,7 @@ int sendHTTPRequest(int server_fd, struct http_request *req ,struct http_url *ur
     }
     temp = snprintf(request + offset,sizeof(request) - offset,
     "Host: %s\r\n",url->host);
-    if(temp<0 || temp >= sizeof(request)-offset) return 1;
+    if(temp<0 || (size_t)temp >= sizeof(request)-offset) return 1;
     else
     {
         offset+=temp;
@@ -224,12 +223,12 @@ int sendHTTPRequest(int server_fd, struct http_request *req ,struct http_url *ur
     for (size_t i = 0; i < req->headers.count; i++)
     {
         temp = write_header(request+offset,sizeof(request)-offset,req->headers.items[i].name,req->headers.items[i].value);
-        if(temp<0 || temp >= sizeof(request)-offset) return 1;
+        if(temp<0 || (size_t)temp >= sizeof(request)-offset) return 1;
         offset+=temp;
     }
 
     temp = snprintf(request + offset,sizeof(request) - offset,"\r\n");
-    if(temp<0 || temp >= sizeof(request)-offset) return 1;
+    if(temp<0 || (size_t)temp >= sizeof(request)-offset) return 1;
     else
     {
         offset+=temp;

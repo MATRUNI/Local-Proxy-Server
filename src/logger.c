@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "logger.h"
+#include <stdarg.h>
 
 int init_logger(FILE **logger)
 {
@@ -18,17 +19,26 @@ int init_logger(FILE **logger)
     return 0;
 }
 
-int write_log(FILE *logger,const char *line)
+int write_log(FILE *logger,const char *line,...)
 {
     if(logger==NULL || line==NULL) 
     {
         printf("Logger isn't availalbe.\n");
         return 1;
     }
-    int res = fprintf(logger,"%s\n",line);
+    va_list args;
+    va_start(args,line);
+    int res = vfprintf(logger,line,args);
+    va_end(args);
     if(res<0)
     {
-        perror("fprintf");
+        perror("vfprintf");
+        return 1;
+    }
+    res = fputc('\n',logger);
+    if(res<0)
+    {
+        perror("fputc");
         return 1;
     }
     int flush_response = fflush(logger);

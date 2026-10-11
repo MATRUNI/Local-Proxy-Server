@@ -15,11 +15,11 @@ int main(int argc,char *argv[])
     FILE *logger = NULL;
     setbuf(stdout, NULL);
     int port=1777;
-    int logger_active=0;
+    // int logger_active=0;
     if(init_logger(&logger)==1)
     {
         printf("Logger initialization failed.\n");
-        logger_active=1;
+        // logger_active=1;
     }
     for(int i=1;i<argc;i++)
     {
@@ -52,6 +52,7 @@ int main(int argc,char *argv[])
                 printf("Error while retrieving logs.\n");
                 return 1;
             }
+            return 0;
         }
         else
         {
@@ -61,9 +62,7 @@ int main(int argc,char *argv[])
         }    
     }
     int reuse=1;
-    char line[50];
-    snprintf(line,sizeof(line),"Server it listening to 127.0.0.1:%d",port);
-    write_log(logger,line);
+    write_log(logger,"Server it listening to 127.0.0.1:%d",port);
     
     struct proxy_server server={0};
     setsockopt(server.listen_fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));

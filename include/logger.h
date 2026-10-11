@@ -4,7 +4,7 @@
 
 int init_logger(FILE **logger);
 
-int write_log(FILE *logger,const char *line);
+int write_log(FILE *logger,const char *line, ...);
 
 int get_logs(FILE *logger);
 
