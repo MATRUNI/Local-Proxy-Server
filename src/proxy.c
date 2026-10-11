@@ -95,10 +95,9 @@ int handle_options_request(int client_fd)
 int write_header(char *buffer,size_t len,const char *name,const char *value)
 {
     int written = snprintf(buffer,len,"%s: %s\r\n",name,value);
-    if(written<0)
+    if(written<0 || (size_t)written >= len)
     return -1;
-    else if(written>=(int)len)
-    return -1;
+
     return written;
 }
 
@@ -204,24 +203,37 @@ int send_headers(int fd,const char *buffer, char *headers_end ,size_t total)
 int sendHTTPRequest(int server_fd, struct http_request *req ,struct http_url *url)
 {
     char request[MAX_HEADER_SIZE];
-    int offset = 0;
+    size_t offset = 0;
+    int temp;
 
-    offset += snprintf(request + offset,sizeof(request) - offset,
+    temp = snprintf(request + offset,sizeof(request) - offset,
         "%s %s %s\r\n",req->method,url->path,req->version);
-
-    offset += snprintf(request + offset,sizeof(request) - offset,
-        "Host: %s\r\n",url->host);
+    if(temp<0 || (size_t)temp >= sizeof(request)-offset) return 1;
+    else
+    {
+        offset+=temp;
+    }
+    temp = snprintf(request + offset,sizeof(request) - offset,
+    "Host: %s\r\n",url->host);
+    if(temp<0 || temp >= sizeof(request)-offset) return 1;
+    else
+    {
+        offset+=temp;
+    }
 
     for (size_t i = 0; i < req->headers.count; i++)
     {
-        offset += snprintf(request + offset,sizeof(request) - offset,
-            "%s: %s\r\n",
-            req->headers.items[i].name,req->headers.items[i].value
-        );
+        temp = write_header(request+offset,sizeof(request)-offset,req->headers.items[i].name,req->headers.items[i].value);
+        if(temp<0 || temp >= sizeof(request)-offset) return 1;
+        offset+=temp;
     }
 
-    offset += snprintf(request + offset,sizeof(request) - offset,"\r\n");
-
+    temp = snprintf(request + offset,sizeof(request) - offset,"\r\n");
+    if(temp<0 || temp >= sizeof(request)-offset) return 1;
+    else
+    {
+        offset+=temp;
+    }
     if(send_all(server_fd,request,offset)==1)
     {
         return 1;
