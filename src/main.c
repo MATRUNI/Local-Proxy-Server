@@ -7,15 +7,23 @@
 
 #include "server.h"
 #include "proxy.h"
+#include "logger.h"
 
 
 int main(int argc,char *argv[])
 {
+    FILE *logger = NULL;
     setbuf(stdout, NULL);
     int port=1777;
+    int logger_active=0;
+    if(init_logger(&logger)==1)
+    {
+        printf("Logger initialization failed.\n");
+        logger_active=1;
+    }
     for(int i=1;i<argc;i++)
     {
-        if (strcmp(argv[i], "-p") == 0)
+        if (strcasecmp(argv[i], "-p") == 0)
         {
             if (i + 1 < argc)
             {
@@ -23,28 +31,39 @@ int main(int argc,char *argv[])
                 long value=strtol(argv[++i],&end,10);
                 if(*end!='\0' || value<1 || value>65535)
                 {
-                    printf("Invalid port.\n");
+                    write_log(logger,"Invalid port.");
+                    close_logger(&logger);
                     return 1;
                 }
                 port = (int)value;
             }
         }
-        else if (strcmp(argv[i], "-n") == 0)
+        else if (strcasecmp(argv[i], "-n") == 0)
         {
             if (i + 1 < argc)
             {
                 printf("Name: %s\n", argv[++i]);
             }
         }
+        else if (strcasecmp(argv[i],"logs")==0)
+        {
+            if(get_logs(logger)==1)
+            {
+                printf("Error while retrieving logs.\n");
+                return 1;
+            }
+        }
         else
         {
-            printf("Invalid arguments.\n");
+            write_log(logger,"Invalid arguments.");
+            close_logger(&logger);
             return 1;
         }    
     }
     int reuse=1;
-    
-    printf("Server it listening to 127.0.0.1:%d\n",port);
+    char line[50];
+    snprintf(line,sizeof(line),"Server it listening to 127.0.0.1:%d",port);
+    write_log(logger,line);
     
     struct proxy_server server={0};
     setsockopt(server.listen_fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));
