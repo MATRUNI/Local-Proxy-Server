@@ -9,6 +9,7 @@
 #include "url.h"
 #include "http.h"
 #include "server.h"
+#include "logger.h"
 
 #define BUFFER_SIZE     (65536)
 #define MAX_HEADER_SIZE (65536)
@@ -28,7 +29,7 @@ int connectToDNS(struct addrinfo *adr)
         }
         else
         {
-            printf("Connected\n");
+            write_log("Connected");
             return server_fd;
         }
     }
@@ -101,7 +102,7 @@ int write_header(char *buffer,size_t len,const char *name,const char *value)
     return written;
 }
 
-int send_headers(int fd,const char *buffer, char *headers_end ,size_t total)
+int send_CORS_headers(int fd,const char *buffer, char *headers_end ,size_t total)
 {
     struct http_headers headers={0};
     // 1. Find the end of the HTTP status line / request line (e.g., "HTTP/1.1 200 OK\r\n")
@@ -197,6 +198,37 @@ int send_headers(int fd,const char *buffer, char *headers_end ,size_t total)
     free(new_buffer);
     free_headers(&headers);
     return 0; // success
+}
+
+int send_body(int sender_fd,int receiver_fd, long len, char *buffer, size_t buffer_len)
+{
+    if(buffer==NULL || len<0) return 1;
+    while (len>0)
+    {
+        int n;
+        if(len>=(long)buffer_len)
+        n = recv(sender_fd,buffer, buffer_len,0);
+        else
+        n = recv(sender_fd,buffer, len,0);
+
+        if(n==-1)
+        {
+            perror("recv");
+            return 1;
+        }
+        len-=n;
+        if (n == 0 && len>0) break;
+
+        if(send_all(receiver_fd,buffer,n)==1)
+        {
+            return 1;
+        }
+    }
+    if(len>0)
+    {
+        return 1;
+    }
+    return 0;
 }
 
 int sendHTTPRequest(int server_fd, struct http_request *req ,struct http_url *url)
@@ -328,7 +360,7 @@ int receiveHTTPResponse(int server_fd, int client_fd)
             capacity*=2;
             if(capacity>MAX_HEADER_SIZE)
             {
-                printf("ERROR: Header too large.\n");
+                write_log("ERROR: Header too large.");
                 free(buffer);
                 return 1;
             }
@@ -379,7 +411,7 @@ int receiveHTTPResponse(int server_fd, int client_fd)
         close(server_fd);
         return 1;
     }
-    if(send_headers(client_fd,buffer,headers_end,total)==1)
+    if(send_CORS_headers(client_fd,buffer,headers_end,total)==1)
     {
         free(buffer);
         close(server_fd);
@@ -393,32 +425,7 @@ int receiveHTTPResponse(int server_fd, int client_fd)
         close(server_fd);
         return 1;    
     }
-    while (remaining_body>0)
-    {
-        int n;
-        if(remaining_body>=(long)capacity)
-        n = recv(server_fd,buffer, capacity,0);
-        else
-        n = recv(server_fd,buffer, remaining_body,0);
-
-        if(n==-1)
-        {
-            perror("recv");
-            close(server_fd);
-            free(buffer);
-            return 1;
-        }
-        remaining_body-=n;
-        if (n == 0 && remaining_body>0) break;
-
-        if(send_all(client_fd,buffer,n)==1)
-        {
-            close(server_fd);
-            free(buffer);
-            return 1;
-        }
-    }
-    if(remaining_body>0)
+    if(send_body(server_fd,client_fd,remaining_body,buffer,capacity)==1)
     {
         free(buffer);
         close(server_fd);
@@ -444,7 +451,7 @@ int proxy_handle_client(int client_fd)
             capacity*=2;
             if(capacity>MAX_HEADER_SIZE)
             {
-                printf("ERROR: Header too large.\n");
+                write_log("ERROR: Header too large.");
                 free(buffer);
                 return 1;
             }
@@ -466,7 +473,7 @@ int proxy_handle_client(int client_fd)
         }
         if (n == 0)
         {
-            printf("Client disconnected.\n");
+            write_log("Client disconnected.\n");
             break;
         }
 
@@ -474,7 +481,7 @@ int proxy_handle_client(int client_fd)
         buffer[total]='\0';
         if(total >=capacity-1)
         {
-            printf("Buffer full.'\n");
+            write_log("Buffer full.");
             break;
         }
     }
@@ -482,7 +489,7 @@ int proxy_handle_client(int client_fd)
     if(parse_request(buffer,&req)==1)
     {
         free(buffer);
-        printf("Invalid request.\n");
+        write_log("Invalid request.");
         return 1;
     }
 
@@ -499,14 +506,14 @@ int proxy_handle_client(int client_fd)
         return 0;
     }
 
-    printf("%s %s %s\n",req.method,req.path,req.version);
+    write_log("%s %s %s",req.method,req.path,req.version);
 
     struct http_url url={0};
     if(parse_url(req.path,&url)==1)
     {
         free_request(&req);
         free(buffer);
-        printf("Invalid URL.\n");
+        write_log("Invalid URL.");
         return 1;
     }
     int server_fd = make_api_call(url.host,url.port);
