@@ -102,6 +102,56 @@ int write_header(char *buffer,size_t len,const char *name,const char *value)
     return written;
 }
 
+int send_headers(int fd,char *new_buffer,size_t total, struct http_headers *headers, size_t remaining ,int cors_included)
+{
+    for (size_t i = 0; i < headers->count; i++)
+    {
+        if( headers->items[i].name !=NULL)
+        {
+            const char *value = headers->items[i].value;
+            int temp;
+            temp =write_header(new_buffer+remaining,total-remaining,headers->items[i].name,value);
+            if(temp<0)
+            {
+                return -1;
+            }
+            remaining+=temp;
+        }
+    }
+
+    if(cors_included==0)
+    {
+        char *cors_headers[] = {
+            "Access-Control-Allow-Origin",
+            "Access-Control-Allow-Methods",
+            "Access-Control-Allow-Headers",
+            "Access-Control-Expose-Headers"
+        };
+        char *cors_values[] = {
+            "*",
+            "GET, POST, PUT, DELETE, OPTIONS",
+            "*",
+            "Content-Length, Content-Type",
+        };
+        for(int i=0;i<4;i++)
+        {
+            int temp=write_header(new_buffer+remaining,total-remaining,cors_headers[i],cors_values[i]);
+            if(temp<0)
+            {
+                return -1;
+            }
+            remaining+=temp;
+        }
+    }
+    memcpy(new_buffer + remaining, "\r\n", 2);
+    remaining += 2;
+    if(send_all(fd,new_buffer,remaining)==1)
+    {
+        return 1;
+    }
+    return 0; // success
+}
+
 int send_CORS_headers(int fd,const char *buffer, char *headers_end ,size_t total)
 {
     struct http_headers headers={0};
@@ -404,33 +454,71 @@ int receiveHTTPResponse(int server_fd, int client_fd)
             printf("%c", buffer[w]);
         w++;
     }
-    long len = find_capacity(buffer);
-    if(len==-1)
+    struct http_response res={0};
+    if(parse_response(buffer,&res)!=0)
     {
         free(buffer);
         close(server_fd);
         return 1;
     }
-    if(send_CORS_headers(client_fd,buffer,headers_end,total)==1)
+    const char *len_str = get_header_value(&res.headers, "Content-Length");
+    if (len_str == NULL)
     {
         free(buffer);
+        free_response(&res);
         close(server_fd);
         return 1;
     }
-    headers_end+=4;
-    long remaining_body = len - ((buffer + total) - headers_end);
-    if(remaining_body<0)
+    long content_length = strtol(len_str, NULL, 10);
+
+    size_t header_out_cap = total + 1024;
+    char *header_out_buf = malloc(header_out_cap);
+    if (header_out_buf == NULL)
     {
         free(buffer);
-        close(server_fd);
-        return 1;    
-    }
-    if(send_body(server_fd,client_fd,remaining_body,buffer,capacity)==1)
-    {
-        free(buffer);
+        free_response(&res);
         close(server_fd);
         return 1;
     }
+
+    size_t headers_len = snprintf(header_out_buf, header_out_cap, "%s %d %s\r\n",
+                                  res.version, res.statusCode, res.statusText);
+
+    if (send_headers(client_fd, header_out_buf, header_out_cap, &res.headers, headers_len, 0) == 1)
+    {
+        free(buffer);
+        free(header_out_buf);
+        free_response(&res);
+        close(server_fd);
+        return 1;
+    }
+
+    free(header_out_buf);
+    free_response(&res);
+
+    char *body_start = headers_end + 4;
+    size_t initial_body_bytes = total - (body_start - buffer);
+    if (initial_body_bytes > 0)
+    {
+        if (send_all(client_fd, body_start, initial_body_bytes) == 1)
+        {
+            free(buffer);
+            close(server_fd);
+            return 1;
+        }
+    }
+
+    long remaining_to_read = content_length - initial_body_bytes;
+    if (remaining_to_read > 0)
+    {
+        if (send_body(server_fd, client_fd, remaining_to_read, buffer, capacity) == 1)
+        {
+            free(buffer);
+            close(server_fd);
+            return 1;
+        }
+    }
+
     free(buffer);
     close(server_fd);
     return 0;
@@ -473,8 +561,9 @@ int proxy_handle_client(int client_fd)
         }
         if (n == 0)
         {
-            write_log("Client disconnected.\n");
-            break;
+            free(buffer);
+            close(client_fd);
+            return 1;
         }
 
         total+=n;
@@ -505,15 +594,39 @@ int proxy_handle_client(int client_fd)
         free(buffer);
         return 0;
     }
+    const char *methods[] = {"GET","POST","PUT","DELETE","HEAD","PATCH"};
+    for(size_t i=0;i<6;i++)
+    {
+        if(strcmp(req.method,methods[i])==0)
+        {
+            break;
+        }
+        if(i==5)
+        {
+            free_request(&req);
+            free(buffer);
+            write_log("Invalid request method.");
+            return 1;
+        }
+    }
 
     write_log("%s %s %s",req.method,req.path,req.version);
+    const char *target = get_header_value(&req.headers,"X-Target-Url");
+    if(target==NULL && strncmp(req.path,"/?url=",6)==0)
+    {
+        target = req.path+6;
+    }
+    if(target==NULL && (strncmp(req.path,"https://",8)==0 || strncmp(req.path,"http://",7)==0))
+    {
+        target = req.path;
+    }
 
     struct http_url url={0};
-    if(parse_url(req.path,&url)==1)
+    if(target==NULL || parse_url((char *)target,&url)==1)
     {
         free_request(&req);
         free(buffer);
-        write_log("Invalid URL.");
+        write_log("Invalid or missing target URL.");
         return 1;
     }
     int server_fd = make_api_call(url.host,url.port);
