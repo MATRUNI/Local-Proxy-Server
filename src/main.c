@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <stdlib.h>
+#include <signal.h>
 
 #include "server.h"
 #include "proxy.h"
@@ -13,6 +14,7 @@
 int main(int argc,char *argv[])
 {
     setbuf(stdout, NULL);
+    signal(SIGPIPE, SIG_IGN);
     int port=1777;
     if(init_logger()==1)
     {
@@ -78,7 +80,8 @@ int main(int argc,char *argv[])
         if(proxy_handle_client(client_fd)==1)
         {
             close(client_fd);
-            break;
+            // break;
+            continue;
         }
         close(client_fd);
     }
