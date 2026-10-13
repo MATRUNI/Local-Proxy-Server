@@ -125,3 +125,64 @@ int parse_request(char *buffer, struct http_request *req)
     }
     return 0;
 }
+
+const char *get_header_value(const struct http_headers *headers, const char *name)
+{
+    if(name==NULL || headers==NULL || headers->items==NULL) return NULL;
+    for(size_t i=0;i<headers->count;i++)
+    {
+        if(headers->items[i].name!=NULL && headers->items[i].value!=NULL && strcasecmp(headers->items[i].name,name)==0)
+            return headers->items[i].value;
+    }
+    return NULL;
+}
+
+int parseResponseLine(char *line, struct http_response *res)
+{
+    if (line == NULL || res == NULL) return 1;
+
+    char *version_end = strchr(line, ' ');
+    if (version_end == NULL) return 1;
+
+    *version_end = '\0';
+    res->version = line;
+
+    char *status_code_start = version_end + 1;
+    char *status_code_end = strchr(status_code_start, ' ');
+    if (status_code_end == NULL) return 1;
+
+    *status_code_end = '\0';
+    res->statusCode = atoi(status_code_start);
+    res->statusText = status_code_end + 1;
+
+    return 0;
+}
+
+void free_response(struct http_response *res)
+{
+    free_headers(&res->headers);
+    res->version=NULL;
+    res->statusText=NULL;
+    res->statusCode=0;
+}
+
+int parse_response(char *buffer, struct http_response *res)
+{
+    if(buffer==NULL || res==NULL) return 1;
+    char *line_end =strstr(buffer,"\r\n");
+    if(line_end==NULL) return 1;
+    *line_end='\0';
+
+    if(parseResponseLine(buffer,res)==1)
+    {
+        printf("Invalid response.\n");
+        return 1;
+    }
+    if(parse_headers(line_end+2,&res->headers)==1)
+    {
+        printf("Invalid response.\n");
+        free_response(res);
+        return 1;
+    }
+    return 0;
+}

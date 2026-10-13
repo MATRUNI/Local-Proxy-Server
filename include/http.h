@@ -40,4 +40,10 @@ void free_headers(struct http_headers *headers);
 
 void free_request(struct http_request *req);
 
+const char *get_header_value(const struct http_headers *headers, const char *name);
+
+void free_response(struct http_response *res);
+
+int parse_response(char *buffer, struct http_response *res);
+
 #endif
