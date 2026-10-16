@@ -2,7 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "url.h"
-
+#include <ctype.h>
 #include <stdio.h>
 
 int isNumber(char *str) {
@@ -18,6 +18,44 @@ int isNumber(char *str) {
     return 0;
     else return 1;
 }
+
+static void url_decode_in_place(char *str)
+{
+    char *src = str;
+    char *dst = str;
+    char a, b;
+
+    while (*src)
+    {
+        if (*src == '%' &&
+            (a = src[1]) && (b = src[2]) &&
+            isxdigit((unsigned char)a) && isxdigit((unsigned char)b))
+        {
+            if (a >= 'a') a -= 'a' - 'A';
+            if (a >= 'A') a -= ('A' - 10);
+            else a -= '0';
+
+            if (b >= 'a') b -= 'a' - 'A';
+            if (b >= 'A') b -= ('A' - 10);
+            else b -= '0';
+
+            *dst++ = (char)(16 * a + b);
+            src += 3;
+        }
+        else if (*src == '+')
+        {
+            *dst++ = ' ';
+            src++;
+        }
+        else
+        {
+            *dst++ = *src++;
+        }
+    }
+    *dst = '\0';
+}
+
+
 
 void free_url(struct http_url *url)
 {
@@ -74,6 +112,7 @@ int validate_host(char *host)
 int parse_url(char *input, struct http_url *url)
 {
     if(input ==NULL || url==NULL) return 1;
+    url_decode_in_place(input);
     char *host = strstr(input,"://");
     if(host==NULL) return 1;
 

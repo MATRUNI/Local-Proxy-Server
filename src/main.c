@@ -9,7 +9,7 @@
 #include "server.h"
 #include "proxy.h"
 #include "logger.h"
-
+#include "tls.h"
 
 int main(int argc,char *argv[])
 {
@@ -19,6 +19,11 @@ int main(int argc,char *argv[])
     if(init_logger()==1)
     {
         printf("Failed to initialise logger.\n");
+    }
+    if(tls_init()!=0)
+    {
+        write_log("Failed to initialize TLS");
+        return 1;
     }
     for(int i=1;i<argc;i++)
     {
@@ -80,7 +85,6 @@ int main(int argc,char *argv[])
         if(proxy_handle_client(client_fd)==1)
         {
             close(client_fd);
-            // break;
             continue;
         }
         close(client_fd);

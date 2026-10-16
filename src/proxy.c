@@ -9,9 +9,9 @@
 
 #include "url.h"
 #include "http.h"
-#include "server.h"
 #include "logger.h"
 #include "proxy.h"
+#include "tls.h"
 
 #define BUFFER_SIZE     (65536)
 #define MAX_HEADER_SIZE (65536)
@@ -31,7 +31,6 @@ int connectToDNS(struct addrinfo *adr)
         }
         else
         {
-            write_log("Connected");
             return server_fd;
         }
     }
@@ -156,157 +155,32 @@ int send_headers(int fd,char *new_buffer,size_t total, struct http_headers *head
     return 0; // success
 }
 
-int send_CORS_headers(int fd,const char *buffer, char *headers_end ,size_t total)
+int stream_body(struct proxy_connection *con,bool to_client,char *buffer,size_t capacity, size_t total,char *headers_end,long content)
 {
-    struct http_headers headers={0};
-    // 1. Find the end of the HTTP status line / request line (e.g., "HTTP/1.1 200 OK\r\n")
-    const char *line_end = strstr(buffer,"\r\n");
-    if(line_end==NULL) return 1;
-    // 2. Parse all remaining headers starting right after the first line
-    if(parse_headers((char *)line_end+2,&headers)==1)
-    {
-        free_headers(&headers);
-        return 1;
-    }
-
-    // 3. Allocate a new buffer for the modified response. 
-    // We add 64 bytes of extra safety padding on top of 'total' just in case sizes shift slightly.
-    size_t new_capacity = total + 265;
-    char *new_buffer = malloc(new_capacity);
-    if(new_buffer==NULL) return 1;
-
-    // 4. Copy the first line (Status/Request line) over to our new buffer
-    size_t new_len = line_end - buffer + 2; //  +2 includes \r\n
-    memcpy(new_buffer,buffer,new_len);
-
-    char *cors_headers[] = {
-        "Access-Control-Allow-Origin",
-        "Access-Control-Allow-Methods",
-        "Access-Control-Allow-Headers",
-        "Access-Control-Expose-Headers"
-    };
-
-    // 5. Loop through all parsed headers, modify "Connection" to "close", and format them
-    for (size_t i = 0; i < headers.count; i++)
-    {
-        if( headers.items[i].name !=NULL)
-        {
-            const char *value = headers.items[i].value;
-            int temp;
-            // Case-insensitive check for the "Connection" header
-            if(strcasecmp(headers.items[i].name,"connection")==0)
-            {
-                value = "close";
-            }
-            if(strcasecmp(headers.items[i].name,"Access-Control-Allow-Origin")==0
-              || strcasecmp(headers.items[i].name,"Access-Control-Allow-Methods")==0
-              || strcasecmp(headers.items[i].name,"Access-Control-Allow-Headers")==0
-              || strcasecmp(headers.items[i].name,"Access-Control-Expose-Headers")==0)
-            {
-                continue;
-            }
-
-            temp =write_header(new_buffer+new_len,new_capacity-new_len,headers.items[i].name,value);
-            if(temp<0)
-            {
-                free_headers(&headers);
-                free(new_buffer);
-                return -1;
-            }
-            new_len+=temp;
-        }
-    }
-    char *cors_values[] = {
-        "*",
-        "GET, POST, PUT, DELETE, OPTIONS",
-        "*",
-        "Content-Length, Content-Type",
-    };
-    for(int i=0;i<4;i++)
-    {
-        int temp=write_header(new_buffer+new_len,new_capacity-new_len,cors_headers[i],cors_values[i]);
-        if(temp<0)
-        {
-            free_headers(&headers);
-            free(new_buffer);
-            return -1;
-        }
-        new_len+=temp;
-    }
-    // 6. Append the final \r\n to close out the header section (\r\n\r\n separator)
-    memcpy(new_buffer+new_len,"\r\n",2);
-    new_len+=2;
-    // 7. Locate and copy the original response body data right after the headers
-    const char *body = headers_end + 4;
-    size_t body_len = total - (body - buffer);
-    
-    memcpy(new_buffer + new_len, body, body_len);
-    size_t final_total_len = new_len + body_len;
-    if(send_all(fd,new_buffer,final_total_len)==1)
-    {
-        free(new_buffer);
-        free_headers(&headers);
-        return 1;
-    }
-    // 9. Clean up allocated memory to avoid memory leaks
-    free(new_buffer);
-    free_headers(&headers);
-    return 0; // success
-}
-
-int send_body(int sender_fd,int receiver_fd, long len, char *buffer, size_t buffer_len)
-{
-    if(buffer==NULL || len<0) return 1;
-    while (len>0)
-    {
-        int n;
-        if(len>=(long)buffer_len)
-        n = recv(sender_fd,buffer, buffer_len,0);
-        else
-        n = recv(sender_fd,buffer, len,0);
-
-        if(n==-1)
-        {
-            perror("recv");
-            return 1;
-        }
-        len-=n;
-        if (n == 0 && len>0) break;
-
-        if(send_all(receiver_fd,buffer,n)==1)
-        {
-            return 1;
-        }
-    }
-    if(len>0)
-    {
-        return 1;
-    }
-    return 0;
-}
-
-int stream_body(int sender_fd, int receiver_fd,char *buffer,size_t capacity, size_t total,char *headers_end,long content)
-{
-    if(content<=0) return 0;
-    if(buffer==NULL || headers_end==NULL) return 1;
+    if(content<=0 || buffer==NULL || headers_end==NULL) return 1;
     char *body_start = headers_end+4;
     size_t initial_body_bytes = total - (body_start-buffer);
-    if(initial_body_bytes>0)
+    if (initial_body_bytes > 0)
     {
-        if(send_all(receiver_fd,body_start,initial_body_bytes)==1)
-        {
-            return 1;
-        }
+        int err = to_client 
+            ? send_all(con->client_fd, body_start, initial_body_bytes) 
+            : conn_write_all(con, body_start, initial_body_bytes);
+        if (err == 1) return 1;
     }
     long remaining_bytes = content - initial_body_bytes;
-    if(remaining_bytes>0)
+    while(remaining_bytes>0)
     {
-        if(send_body(sender_fd,receiver_fd,remaining_bytes,buffer,capacity)==1) return 1;
+        size_t to_read = remaining_bytes > (long) capacity ? capacity : (size_t) remaining_bytes;
+        int n = to_client ? con->read(con, buffer, to_read) : recv(con->client_fd, buffer, to_read, 0);
+        if(n<=0) break;
+        int err = to_client ? send_all(con->client_fd, buffer, n) : conn_write_all(con, buffer, n);
+        if (err == 1) return 1;
+        remaining_bytes -=n;
     }
     return 0;
 }
 
-int sendHTTPRequest(int server_fd, struct http_request *req ,struct http_url *url)
+int sendHTTPRequest(struct proxy_connection *con, struct http_request *req ,struct http_url *url)
 {
     char request[MAX_HEADER_SIZE];
     size_t offset = 0;
@@ -340,7 +214,7 @@ int sendHTTPRequest(int server_fd, struct http_request *req ,struct http_url *ur
     {
         offset+=temp;
     }
-    if(send_all(server_fd,request,offset)==1)
+    if(conn_write_all(con,request,offset)==1)
     {
         return 1;
     }
@@ -447,10 +321,9 @@ int receiveHTTPResponse(struct proxy_connection *con)
             }
             buffer=new_buf;
         }
-        int n = recv(con->upstream_fd,buffer+total, capacity-total-1,0);
+        int n = con->read(con,buffer+total, capacity-total-1);
         if(n==-1)
         {
-            perror("recv");
             free(buffer);
             close(con->upstream_fd);
             return 1;
@@ -515,7 +388,7 @@ int receiveHTTPResponse(struct proxy_connection *con)
     {
         long content_length = strtol(len_str, NULL, 10);
         free_response(&res);
-        if(stream_body(con->upstream_fd,con->client_fd,buffer,capacity,total,headers_end,content_length)==1)
+        if(stream_body(con,true,buffer,capacity,total,headers_end,content_length)==1)
         {
             free(buffer);
             close(con->upstream_fd);
@@ -538,7 +411,7 @@ int receiveHTTPResponse(struct proxy_connection *con)
         }
         while(1)
         {
-            int n = recv(con->upstream_fd,buffer,capacity,0);
+            int n = con->read(con,buffer,capacity);
             if(n<=0) break;
             if(send_all(con->client_fd,buffer,n)==1)
             {
@@ -678,10 +551,19 @@ int proxy_handle_client(int client_fd)
     struct proxy_connection con = {
         .client_fd = client_fd,
         .upstream_fd = server_fd,
-        .is_https = is_https
+        .upstream_ssl = NULL
     };
-    if(sendHTTPRequest(server_fd,&req,&url)==1)
+    if(tls_connect(&con,url.host,is_https)==1)
     {
+        conn_close(&con);
+        free_request(&req);
+        free_url(&url);
+        free(buffer);
+        return 1;
+    }
+    if(sendHTTPRequest(&con,&req,&url)==1)
+    {
+        conn_close(&con);
         free_request(&req);
         free_url(&url);
         free(buffer);
@@ -694,8 +576,9 @@ int proxy_handle_client(int client_fd)
     {
         long content_length = strtol(len_str, NULL, 10);
         if(content_length>0)
-            if(stream_body(con.client_fd,con.upstream_fd,buffer,capacity,total,headers_end,content_length)==1)
+            if(stream_body(&con,false,buffer,capacity,total,headers_end,content_length)==1)
             {
+                conn_close(&con);
                 free(buffer);
                 free_request(&req);
                 free_url(&url);
@@ -706,13 +589,14 @@ int proxy_handle_client(int client_fd)
     
     if(receiveHTTPResponse(&con)==1)
     {
+        conn_close(&con);
         free_request(&req);
         free_url(&url);
         free(buffer);
         close(server_fd);
         return 1;
     }
-
+    conn_close(&con);
     free_request(&req);
     free_url(&url);
     free(buffer);
