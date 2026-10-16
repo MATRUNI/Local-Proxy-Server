@@ -295,8 +295,9 @@ int find_encoding(char *buffer,char **start)
 
 int receiveHTTPResponse(struct proxy_connection *con)
 {
+    int return_code = 1;
     char *buffer = malloc(4096);
-    if(buffer==NULL) return 1;
+    if(buffer==NULL) return return_code;
     size_t total=0;
     size_t capacity=4096;
 
@@ -310,23 +311,19 @@ int receiveHTTPResponse(struct proxy_connection *con)
             if(capacity>MAX_HEADER_SIZE)
             {
                 write_log("ERROR: Header too large.");
-                free(buffer);
-                return 1;
+                goto cleanup_buffer;
             }
             char * new_buf = realloc(buffer,capacity);
             if(new_buf==NULL)
             {
-                free(buffer);
-                return 1;
+                goto cleanup_buffer;
             }
             buffer=new_buf;
         }
         int n = con->read(con,buffer+total, capacity-total-1);
         if(n==-1)
         {
-            free(buffer);
-            close(con->upstream_fd);
-            return 1;
+            goto cleanup_buffer;
         }
         if (n == 0) break;
         total+=n;
@@ -336,9 +333,7 @@ int receiveHTTPResponse(struct proxy_connection *con)
     if(headers_end==NULL)
     {
         fprintf(stderr, "Incomplete HTTP response headers.\n");
-        free(buffer);
-        close(con->upstream_fd);
-        return 1;
+        goto cleanup_buffer;
     }
     printf("Response buffer: \n");
     size_t w=0;
@@ -355,19 +350,15 @@ int receiveHTTPResponse(struct proxy_connection *con)
     struct http_response res={0};
     if(parse_response(buffer,&res)!=0)
     {
-        free(buffer);
-        close(con->upstream_fd);
-        return 1;
+        goto cleanup_buffer;
     }
 
     size_t header_out_cap = total + 1024;
     char *header_out_buf = malloc(header_out_cap);
     if (header_out_buf == NULL)
     {
-        free(buffer);
         free_response(&res);
-        close(con->upstream_fd);
-        return 1;
+        goto cleanup_buffer;
     }
 
     size_t headers_len = snprintf(header_out_buf, header_out_cap, "%s %d %s\r\n",
@@ -375,11 +366,9 @@ int receiveHTTPResponse(struct proxy_connection *con)
 
     if (send_headers(con->client_fd, header_out_buf, header_out_cap, &res.headers, headers_len, 0) == 1)
     {
-        free(buffer);
         free(header_out_buf);
         free_response(&res);
-        close(con->upstream_fd);
-        return 1;
+        goto cleanup_buffer;
     }
 
     free(header_out_buf);
@@ -390,9 +379,7 @@ int receiveHTTPResponse(struct proxy_connection *con)
         free_response(&res);
         if(stream_body(con,true,buffer,capacity,total,headers_end,content_length)==1)
         {
-            free(buffer);
-            close(con->upstream_fd);
-            return 1;
+            goto cleanup_buffer;
         }
     }
     else
@@ -404,9 +391,7 @@ int receiveHTTPResponse(struct proxy_connection *con)
         {
             if(send_all(con->client_fd,body_start,initial_body_bytes)==1)
             {
-                free(buffer);
-                close(con->upstream_fd);
-                return 1;
+                goto cleanup_buffer;
             }
         }
         while(1)
@@ -415,23 +400,22 @@ int receiveHTTPResponse(struct proxy_connection *con)
             if(n<=0) break;
             if(send_all(con->client_fd,buffer,n)==1)
             {
-                free(buffer);
-                close(con->upstream_fd);
-                return 1;
+                goto cleanup_buffer;
             }
         }
     }
-    
+    return_code = 0;
+    cleanup_buffer:
     free(buffer);
-    close(con->upstream_fd);
-    return 0;
+    return return_code;
 }
 
 int proxy_handle_client(int client_fd)
 {
-    if(client_fd<=0) return 1;
+    int res = 1;
+    if(client_fd<=0) return res;
     char *buffer = malloc(4096);
-    if(buffer==NULL) return 1;
+    if(buffer==NULL) return res;
     size_t total=0;
     size_t capacity=4096;
     buffer[0]='\0';
@@ -444,8 +428,7 @@ int proxy_handle_client(int client_fd)
             if(capacity>MAX_HEADER_SIZE)
             {
                 write_log("ERROR: Header too large.");
-                free(buffer);
-                return 1;
+                goto cleanup_buffer;
             }
             char * new_buf = realloc(buffer,capacity);
             if(new_buf==NULL)
@@ -459,15 +442,11 @@ int proxy_handle_client(int client_fd)
         if (n == -1)
         {
             perror("recv");
-            free(buffer);
-            close(client_fd);
-            return 1;
+            goto cleanup_buffer;
         }
         if (n == 0)
         {
-            free(buffer);
-            close(client_fd);
-            return 1;
+            goto cleanup_buffer;
         }
 
         total+=n;
@@ -481,28 +460,22 @@ int proxy_handle_client(int client_fd)
     }
     if(headers_end==NULL)
     {
-        free(buffer);
-        return 1;
+        goto cleanup_buffer;
     }
     struct http_request req={0};
     if(parse_request(buffer,&req)==1)
     {
-        free(buffer);
-        write_log("Invalid request.");
-        return 1;
+        goto cleanup_buffer;
     }
 
     if(strcasecmp(req.method,"OPTIONS")==0)
     {
         if(handle_options_request(client_fd)==1)
         {
-            free_request(&req);
-            free(buffer);
-            return 1;
+            goto cleanup_req;
         }
-        free_request(&req);
-        free(buffer);
-        return 0;
+        res = 0;
+        goto cleanup_req;
     }
     const char *methods[] = {"GET","POST","PUT","DELETE","HEAD","PATCH"};
     for(size_t i=0;i<6;i++)
@@ -513,10 +486,8 @@ int proxy_handle_client(int client_fd)
         }
         if(i==5)
         {
-            free_request(&req);
-            free(buffer);
             write_log("Invalid request method.");
-            return 1;
+            goto cleanup_req;
         }
     }
 
@@ -534,18 +505,13 @@ int proxy_handle_client(int client_fd)
     struct http_url url={0};
     if(target==NULL || parse_url((char *)target,&url)==1)
     {
-        free_request(&req);
-        free(buffer);
         write_log("Invalid or missing target URL.");
-        return 1;
+        goto cleanup_req;
     }
     int server_fd = make_api_call(url.host,url.port);
     if(server_fd==-1)
     {
-        free_request(&req);
-        free_url(&url);
-        free(buffer);
-        return 1;
+        goto cleanup_url;
     }
     bool is_https = (strcasecmp(url.schema,"https")==0);
     struct proxy_connection con = {
@@ -555,20 +521,11 @@ int proxy_handle_client(int client_fd)
     };
     if(tls_connect(&con,url.host,is_https)==1)
     {
-        conn_close(&con);
-        free_request(&req);
-        free_url(&url);
-        free(buffer);
-        return 1;
+        goto cleanup_con;
     }
     if(sendHTTPRequest(&con,&req,&url)==1)
     {
-        conn_close(&con);
-        free_request(&req);
-        free_url(&url);
-        free(buffer);
-        close(server_fd);
-        return 1;
+        goto cleanup_con;
     }
 
     const char *len_str = get_header_value(&req.headers, "Content-Length");
@@ -578,28 +535,22 @@ int proxy_handle_client(int client_fd)
         if(content_length>0)
             if(stream_body(&con,false,buffer,capacity,total,headers_end,content_length)==1)
             {
-                conn_close(&con);
-                free(buffer);
-                free_request(&req);
-                free_url(&url);
-                close(server_fd);
-                return 1;
+                goto cleanup_con;
             }   
     }
     
     if(receiveHTTPResponse(&con)==1)
     {
-        conn_close(&con);
-        free_request(&req);
-        free_url(&url);
-        free(buffer);
-        close(server_fd);
-        return 1;
+        goto cleanup_con;
     }
+    res = 0;
+    cleanup_con:
     conn_close(&con);
-    free_request(&req);
+    cleanup_url:
     free_url(&url);
+    cleanup_req:
+    free_request(&req);
+    cleanup_buffer:
     free(buffer);
-    close(server_fd);
-    return 0;
+    return res;
 }

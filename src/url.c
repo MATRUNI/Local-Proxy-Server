@@ -55,8 +55,6 @@ static void url_decode_in_place(char *str)
     *dst = '\0';
 }
 
-
-
 void free_url(struct http_url *url)
 {
     if(url==NULL) return;
@@ -111,10 +109,11 @@ int validate_host(char *host)
 
 int parse_url(char *input, struct http_url *url)
 {
+    int return_code = 1;
     if(input ==NULL || url==NULL) return 1;
     url_decode_in_place(input);
     char *host = strstr(input,"://");
-    if(host==NULL) return 1;
+    if(host==NULL) return return_code;
 
     size_t len = host - input;
     
@@ -126,18 +125,17 @@ int parse_url(char *input, struct http_url *url)
             strncpy(url->schema,input,len);
             url->schema[len]='\0';
         }
-        else return 1;
+        else return return_code;
     }
     else
     {
-        return 1;
+        return return_code;
     }
 
     host+=3;
     if ( *host=='\0' || *host=='/')
     {
-        free_url(url);
-        return 1;
+        goto cleanup;
     }
 
     char *port = strchr(host,':');
@@ -149,8 +147,7 @@ int parse_url(char *input, struct http_url *url)
         url->host = malloc(len+1);
         if(url->host==NULL || len==0)
         {
-            free_url(url);
-            return 1;
+            goto cleanup;
         }
         else
         {
@@ -160,8 +157,7 @@ int parse_url(char *input, struct http_url *url)
         port++;
         if(*port == '\0' || *port == '/')
         {
-            free_url(url);
-            return 1;
+            goto cleanup;
         }
         path = strchr(port,'/');
         if(path==NULL)
@@ -169,22 +165,19 @@ int parse_url(char *input, struct http_url *url)
             url->path=malloc(2);
             if(url->path==NULL)
             {
-                free_url(url);
-                return 1;
+                goto cleanup;
             }
             strcpy(url->path,"/");
 
             if(validate_port(port)==1)
             {
-                free_url(url);
-                return 1;
+                goto cleanup;
             }
             len = strlen(port);
             url->port = malloc(len+1);
             if(url->port==NULL)
             {
-                free_url(url);
-                return 1;
+                goto cleanup;
             }
             strcpy(url->port,port);
             url->port[len]='\0';
@@ -193,30 +186,26 @@ int parse_url(char *input, struct http_url *url)
         len = path - port;
         if(len>5)
         {
-            free_url(url);
-            return 1;
+            goto cleanup;
         }
         char temp[6];
         strncpy(temp,port,len);
         temp[len]='\0';
         if(validate_port(temp)==1) 
         {
-            free_url(url);
-            return 1;
+            goto cleanup;
         }
         url->port=malloc(strlen(temp)+1);
         if(url->port==NULL)
         {
-            free_url(url);
-            return 1;
+            goto cleanup;
         }
         strcpy(url->port,temp);
         url->path = malloc(strlen(path) + 1);
 
         if (url->path == NULL)
         {
-            free_url(url);
-            return 1;
+            goto cleanup;
         }
 
         strcpy(url->path,path);
@@ -227,8 +216,7 @@ int parse_url(char *input, struct http_url *url)
 
         if (url->port == NULL)
         {
-            free_url(url);
-            return 1;
+            goto cleanup;
         }
         strcpy(url->port, strcmp(url->schema, "https") == 0 ? "443" : "80");
 
@@ -239,15 +227,13 @@ int parse_url(char *input, struct http_url *url)
 
             if (url->path == NULL)
             {
-                free_url(url);
-                return 1;
+                goto cleanup;
             }
             strcpy(url->path, "/");
             len = strlen(host);
             if(validate_host(host)==1)
             {
-                free_url(url);
-                return 1;
+                goto cleanup;
             }
         }
         else
@@ -256,8 +242,7 @@ int parse_url(char *input, struct http_url *url)
             url->path = malloc(len + 1);
             if (url->path == NULL)
             {
-                free_url(url);
-                return 1;
+                goto cleanup;
             }
             strcpy(url->path,path);
             len = path - host;
@@ -265,8 +250,7 @@ int parse_url(char *input, struct http_url *url)
         url->host= malloc(len+1);
         if(url->host==NULL)
         {
-            free_url(url);
-            return 1;
+            goto cleanup;
         }
         if(path==NULL)
         strcpy(url->host,host);
@@ -276,10 +260,12 @@ int parse_url(char *input, struct http_url *url)
             url->host[len]='\0';
             if(validate_host(url->host)==1)
             {
-                free_url(url);
-                return 1;
+                goto cleanup;
             }
         }
     }
     return 0;
+    cleanup:
+    free_url(url);
+    return return_code;
 }
