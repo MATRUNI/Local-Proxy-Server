@@ -507,21 +507,44 @@ int receiveHTTPResponse(int server_fd, int client_fd)
 
     free(header_out_buf);
     const char *len_str = get_header_value(&res.headers, "Content-Length");
-    if (len_str == NULL)
+    if (len_str != NULL)
     {
-        free(buffer);
+        long content_length = strtol(len_str, NULL, 10);
         free_response(&res);
-        close(server_fd);
-        return 1;
+        if(stream_body(server_fd,client_fd,buffer,capacity,total,headers_end,content_length)==1)
+        {
+            free(buffer);
+            close(server_fd);
+            return 1;
+        }
     }
-    long content_length = strtol(len_str, NULL, 10);
-    free_response(&res);
-    if(stream_body(server_fd,client_fd,buffer,capacity,total,headers_end,content_length)==1)
+    else
     {
-        free(buffer);
-        close(server_fd);
-        return 1;
+        free_response(&res);
+        char *body_start = headers_end+4;
+        size_t initial_body_bytes = total - (body_start-buffer);
+        if(initial_body_bytes>0)
+        {
+            if(send_all(client_fd,body_start,initial_body_bytes)==1)
+            {
+                free(buffer);
+                close(server_fd);
+                return 1;
+            }
+        }
+        while(1)
+        {
+            int n = recv(server_fd,buffer,capacity,0);
+            if(n<=0) break;
+            if(send_all(client_fd,buffer,n)==1)
+            {
+                free(buffer);
+                close(server_fd);
+                return 1;
+            }
+        }
     }
+    
     free(buffer);
     close(server_fd);
     return 0;
