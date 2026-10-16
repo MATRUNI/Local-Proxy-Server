@@ -106,6 +106,8 @@ int send_headers(int fd,char *new_buffer,size_t total, struct http_headers *head
 {
     for (size_t i = 0; i < headers->count; i++)
     {
+        if (strncasecmp(headers->items[i].name, "Access-Control-", 15) == 0)
+            continue;
         if( headers->items[i].name !=NULL)
         {
             const char *value = headers->items[i].value;
