@@ -5,11 +5,13 @@
 #include <netdb.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdbool.h>
 
 #include "url.h"
 #include "http.h"
 #include "server.h"
 #include "logger.h"
+#include "proxy.h"
 
 #define BUFFER_SIZE     (65536)
 #define MAX_HEADER_SIZE (65536)
@@ -417,7 +419,7 @@ int find_encoding(char *buffer,char **start)
     return 0;
 }
 
-int receiveHTTPResponse(int server_fd, int client_fd)
+int receiveHTTPResponse(struct proxy_connection *con)
 {
     char *buffer = malloc(4096);
     if(buffer==NULL) return 1;
@@ -445,12 +447,12 @@ int receiveHTTPResponse(int server_fd, int client_fd)
             }
             buffer=new_buf;
         }
-        int n = recv(server_fd,buffer+total, capacity-total-1,0);
+        int n = recv(con->upstream_fd,buffer+total, capacity-total-1,0);
         if(n==-1)
         {
             perror("recv");
             free(buffer);
-            close(server_fd);
+            close(con->upstream_fd);
             return 1;
         }
         if (n == 0) break;
@@ -462,7 +464,7 @@ int receiveHTTPResponse(int server_fd, int client_fd)
     {
         fprintf(stderr, "Incomplete HTTP response headers.\n");
         free(buffer);
-        close(server_fd);
+        close(con->upstream_fd);
         return 1;
     }
     printf("Response buffer: \n");
@@ -481,7 +483,7 @@ int receiveHTTPResponse(int server_fd, int client_fd)
     if(parse_response(buffer,&res)!=0)
     {
         free(buffer);
-        close(server_fd);
+        close(con->upstream_fd);
         return 1;
     }
 
@@ -491,19 +493,19 @@ int receiveHTTPResponse(int server_fd, int client_fd)
     {
         free(buffer);
         free_response(&res);
-        close(server_fd);
+        close(con->upstream_fd);
         return 1;
     }
 
     size_t headers_len = snprintf(header_out_buf, header_out_cap, "%s %d %s\r\n",
                                   res.version, res.statusCode, res.statusText);
 
-    if (send_headers(client_fd, header_out_buf, header_out_cap, &res.headers, headers_len, 0) == 1)
+    if (send_headers(con->client_fd, header_out_buf, header_out_cap, &res.headers, headers_len, 0) == 1)
     {
         free(buffer);
         free(header_out_buf);
         free_response(&res);
-        close(server_fd);
+        close(con->upstream_fd);
         return 1;
     }
 
@@ -513,10 +515,10 @@ int receiveHTTPResponse(int server_fd, int client_fd)
     {
         long content_length = strtol(len_str, NULL, 10);
         free_response(&res);
-        if(stream_body(server_fd,client_fd,buffer,capacity,total,headers_end,content_length)==1)
+        if(stream_body(con->upstream_fd,con->client_fd,buffer,capacity,total,headers_end,content_length)==1)
         {
             free(buffer);
-            close(server_fd);
+            close(con->upstream_fd);
             return 1;
         }
     }
@@ -527,28 +529,28 @@ int receiveHTTPResponse(int server_fd, int client_fd)
         size_t initial_body_bytes = total - (body_start-buffer);
         if(initial_body_bytes>0)
         {
-            if(send_all(client_fd,body_start,initial_body_bytes)==1)
+            if(send_all(con->client_fd,body_start,initial_body_bytes)==1)
             {
                 free(buffer);
-                close(server_fd);
+                close(con->upstream_fd);
                 return 1;
             }
         }
         while(1)
         {
-            int n = recv(server_fd,buffer,capacity,0);
+            int n = recv(con->upstream_fd,buffer,capacity,0);
             if(n<=0) break;
-            if(send_all(client_fd,buffer,n)==1)
+            if(send_all(con->client_fd,buffer,n)==1)
             {
                 free(buffer);
-                close(server_fd);
+                close(con->upstream_fd);
                 return 1;
             }
         }
     }
     
     free(buffer);
-    close(server_fd);
+    close(con->upstream_fd);
     return 0;
 }
 
@@ -672,7 +674,12 @@ int proxy_handle_client(int client_fd)
         free(buffer);
         return 1;
     }
-    
+    bool is_https = (strcasecmp(url.schema,"https")==0);
+    struct proxy_connection con = {
+        .client_fd = client_fd,
+        .upstream_fd = server_fd,
+        .is_https = is_https
+    };
     if(sendHTTPRequest(server_fd,&req,&url)==1)
     {
         free_request(&req);
@@ -687,7 +694,7 @@ int proxy_handle_client(int client_fd)
     {
         long content_length = strtol(len_str, NULL, 10);
         if(content_length>0)
-            if(stream_body(client_fd,server_fd,buffer,capacity,total,headers_end,content_length)==1)
+            if(stream_body(con.client_fd,con.upstream_fd,buffer,capacity,total,headers_end,content_length)==1)
             {
                 free(buffer);
                 free_request(&req);
@@ -697,7 +704,7 @@ int proxy_handle_client(int client_fd)
             }   
     }
     
-    if(receiveHTTPResponse(server_fd,client_fd)==1)
+    if(receiveHTTPResponse(&con)==1)
     {
         free_request(&req);
         free_url(&url);
