@@ -281,6 +281,27 @@ int send_body(int sender_fd,int receiver_fd, long len, char *buffer, size_t buff
     return 0;
 }
 
+int stream_body(int sender_fd, int receiver_fd,char *buffer,size_t capacity, size_t total,char *headers_end,long content)
+{
+    if(content<=0) return 0;
+    if(buffer==NULL || headers_end==NULL) return 1;
+    char *body_start = headers_end+4;
+    size_t initial_body_bytes = total - (body_start-buffer);
+    if(initial_body_bytes>0)
+    {
+        if(send_all(receiver_fd,body_start,initial_body_bytes)==1)
+        {
+            return 1;
+        }
+    }
+    long remaining_bytes = content - initial_body_bytes;
+    if(remaining_bytes>0)
+    {
+        if(send_body(sender_fd,receiver_fd,remaining_bytes,buffer,capacity)==1) return 1;
+    }
+    return 0;
+}
+
 int sendHTTPRequest(int server_fd, struct http_request *req ,struct http_url *url)
 {
     char request[MAX_HEADER_SIZE];
@@ -461,15 +482,6 @@ int receiveHTTPResponse(int server_fd, int client_fd)
         close(server_fd);
         return 1;
     }
-    const char *len_str = get_header_value(&res.headers, "Content-Length");
-    if (len_str == NULL)
-    {
-        free(buffer);
-        free_response(&res);
-        close(server_fd);
-        return 1;
-    }
-    long content_length = strtol(len_str, NULL, 10);
 
     size_t header_out_cap = total + 1024;
     char *header_out_buf = malloc(header_out_cap);
@@ -494,31 +506,22 @@ int receiveHTTPResponse(int server_fd, int client_fd)
     }
 
     free(header_out_buf);
+    const char *len_str = get_header_value(&res.headers, "Content-Length");
+    if (len_str == NULL)
+    {
+        free(buffer);
+        free_response(&res);
+        close(server_fd);
+        return 1;
+    }
+    long content_length = strtol(len_str, NULL, 10);
     free_response(&res);
-
-    char *body_start = headers_end + 4;
-    size_t initial_body_bytes = total - (body_start - buffer);
-    if (initial_body_bytes > 0)
+    if(stream_body(server_fd,client_fd,buffer,capacity,total,headers_end,content_length)==1)
     {
-        if (send_all(client_fd, body_start, initial_body_bytes) == 1)
-        {
-            free(buffer);
-            close(server_fd);
-            return 1;
-        }
+        free(buffer);
+        close(server_fd);
+        return 1;
     }
-
-    long remaining_to_read = content_length - initial_body_bytes;
-    if (remaining_to_read > 0)
-    {
-        if (send_body(server_fd, client_fd, remaining_to_read, buffer, capacity) == 1)
-        {
-            free(buffer);
-            close(server_fd);
-            return 1;
-        }
-    }
-
     free(buffer);
     close(server_fd);
     return 0;
@@ -532,7 +535,8 @@ int proxy_handle_client(int client_fd)
     size_t total=0;
     size_t capacity=4096;
     buffer[0]='\0';
-    while(strstr(buffer,"\r\n\r\n")==NULL)
+    char *headers_end=NULL;
+    while(headers_end==NULL)
     {
         if(total >=capacity-1)
         {
@@ -573,6 +577,12 @@ int proxy_handle_client(int client_fd)
             write_log("Buffer full.");
             break;
         }
+        headers_end = strstr(buffer,"\r\n\r\n");
+    }
+    if(headers_end==NULL)
+    {
+        free(buffer);
+        return 1;
     }
     struct http_request req={0};
     if(parse_request(buffer,&req)==1)
@@ -645,6 +655,21 @@ int proxy_handle_client(int client_fd)
         free(buffer);
         close(server_fd);
         return 1;
+    }
+
+    const char *len_str = get_header_value(&req.headers, "Content-Length");
+    if (len_str != NULL)
+    {
+        long content_length = strtol(len_str, NULL, 10);
+        if(content_length>0)
+            if(stream_body(client_fd,server_fd,buffer,capacity,total,headers_end,content_length)==1)
+            {
+                free(buffer);
+                free_request(&req);
+                free_url(&url);
+                close(server_fd);
+                return 1;
+            }   
     }
     
     if(receiveHTTPResponse(server_fd,client_fd)==1)
