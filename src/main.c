@@ -5,12 +5,22 @@
 #include <arpa/inet.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <pthread.h>
 
 #include "server.h"
 #include "proxy.h"
 #include "logger.h"
 #include "tls.h"
 #include "config.h"
+
+void *proxy_thead_worker(void *arg)
+{
+    int client_fd = *(int *)arg;
+    free(arg);
+    proxy_handle_client(client_fd);
+    close(client_fd);
+    return NULL;
+}
 
 int main(int argc,char *argv[])
 {
@@ -59,7 +69,7 @@ int main(int argc,char *argv[])
     {
         printf("Verbose mode: ON\n");
     }
-    
+
     int reuse=1;
 
     struct proxy_server server={0};
@@ -70,6 +80,7 @@ int main(int argc,char *argv[])
     setsockopt(server.listen_fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));
 
     write_log("Server it listening to %s:%d",config.listen_ip,config.port);
+    pthread_t thread;
     while(1)
     {
         int client_fd = server_accept(&server);
@@ -77,12 +88,17 @@ int main(int argc,char *argv[])
         {
             continue;
         }
-        if(proxy_handle_client(client_fd)==1)
+        int *client_fd_ptr = malloc(sizeof(int));
+        *client_fd_ptr = client_fd;
+        if(pthread_create(&thread,NULL,proxy_thead_worker,client_fd_ptr)!=0)
         {
+            write_log("Out of threads.");
+            free(client_fd_ptr);
             close(client_fd);
-            continue;
+            continue;;
         }
-        close(client_fd);
+
+        pthread_detach(thread);
     }
     server_destroy(&server);
 

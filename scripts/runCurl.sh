@@ -39,4 +39,16 @@ curl -i -s -X OPTIONS "http://localhost:${PORT}/" \
   -H "Access-Control-Request-Method: POST" \
   -H "Access-Control-Request-Headers: authorization" >> logs/response.log 2>&1
 
+echo "--- 6. Testing Concurrent Requests (pthreads in parallel) ---"
+echo -e "\n=== 6. Concurrent Parallel Requests ===" >> logs/response.log
+echo "Firing 10 simultaneous requests..."
+for i in {1..10}; do
+  (
+    CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/?url=https://httpbin.org/get")
+    echo "  [Worker Thread] Request $i finished with HTTP $CODE"
+    echo "Request $i: HTTP $CODE" >> logs/response.log
+  ) &
+done
+wait
+
 echo "Done! Check logs/response.log for the full results."
