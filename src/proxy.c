@@ -12,6 +12,7 @@
 #include "logger.h"
 #include "proxy.h"
 #include "tls.h"
+#include "http_error.h"
 
 #define BUFFER_SIZE     (65536)
 #define MAX_HEADER_SIZE (65536)
@@ -410,6 +411,17 @@ int receiveHTTPResponse(struct proxy_connection *con)
     return return_code;
 }
 
+
+static void send_client_error(int client_fd, int status_code, const char *message)
+{
+    char err[512];
+    int len = format_error_response(err, sizeof(err), status_code, message);
+    if (len > 0)
+    {
+        send_all(client_fd, err, len);
+    }
+}
+
 int proxy_handle_client(int client_fd)
 {
     int res = 1;
@@ -428,13 +440,14 @@ int proxy_handle_client(int client_fd)
             if(capacity>MAX_HEADER_SIZE)
             {
                 write_log("ERROR: Header too large.");
+                send_client_error(client_fd, 413, "Request headers exceed maximum allowed size\n");
                 goto cleanup_buffer;
             }
             char * new_buf = realloc(buffer,capacity);
             if(new_buf==NULL)
             {
-                free(buffer);
-                return 1;
+                send_client_error(client_fd, 500, "Internal server error: out of memory\n");
+                goto cleanup_buffer;
             }
             buffer=new_buf;
         }
@@ -460,11 +473,13 @@ int proxy_handle_client(int client_fd)
     }
     if(headers_end==NULL)
     {
+        send_client_error(client_fd, 400, "Incomplete HTTP request headers\n");
         goto cleanup_buffer;
     }
     struct http_request req={0};
     if(parse_request(buffer,&req)==1)
     {
+        send_client_error(client_fd, 400, "Malformed HTTP request syntax\n");
         goto cleanup_buffer;
     }
 
@@ -487,6 +502,7 @@ int proxy_handle_client(int client_fd)
         if(i==5)
         {
             write_log("Invalid request method.");
+            send_client_error(client_fd, 405, "HTTP method not supported by proxy\n");
             goto cleanup_req;
         }
     }
@@ -506,11 +522,13 @@ int proxy_handle_client(int client_fd)
     if(target==NULL || parse_url((char *)target,&url)==1)
     {
         write_log("Invalid or missing target URL.");
+        send_client_error(client_fd, 400, "Invalid or missing target URL format\n");
         goto cleanup_req;
     }
     int server_fd = make_api_call(url.host,url.port);
     if(server_fd==-1)
     {
+        send_client_error(client_fd, 502, "Failed to connect to target server (DNS or connection refused)\n");
         goto cleanup_url;
     }
     bool is_https = (strcasecmp(url.schema,"https")==0);
@@ -521,10 +539,12 @@ int proxy_handle_client(int client_fd)
     };
     if(tls_connect(&con,url.host,is_https)==1)
     {
+        send_client_error(client_fd, 502, "TLS/SSL handshake with target server failed\n");
         goto cleanup_con;
     }
     if(sendHTTPRequest(&con,&req,&url)==1)
     {
+        send_client_error(client_fd, 502, "Failed to send request headers to target server\n");
         goto cleanup_con;
     }
 
@@ -535,12 +555,14 @@ int proxy_handle_client(int client_fd)
         if(content_length>0)
             if(stream_body(&con,false,buffer,capacity,total,headers_end,content_length)==1)
             {
+                send_client_error(client_fd, 502, "Failed to stream request body to target server\n");
                 goto cleanup_con;
             }   
     }
     
     if(receiveHTTPResponse(&con)==1)
     {
+        send_client_error(client_fd, 502, "Target server closed connection without valid HTTP response\n");
         goto cleanup_con;
     }
     res = 0;
