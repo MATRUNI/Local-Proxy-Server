@@ -10,12 +10,12 @@
 #include "proxy.h"
 #include "logger.h"
 #include "tls.h"
+#include "config.h"
 
 int main(int argc,char *argv[])
 {
     setbuf(stdout, NULL);
     signal(SIGPIPE, SIG_IGN);
-    int port=1777;
     if(init_logger()==1)
     {
         printf("Failed to initialise logger.\n");
@@ -25,56 +25,46 @@ int main(int argc,char *argv[])
         write_log("Failed to initialize TLS");
         return 1;
     }
-    for(int i=1;i<argc;i++)
+    struct proxy_config config = {0};
+    config.port = 17777;
+    config.listen_ip = "127.0.0.1";
+    config.verbose = false;
+    config.mode = MODE_SERVER;
+
+    if(parse_config(argc,argv,&config)==1)
     {
-        if (strcasecmp(argv[i], "-p") == 0)
-        {
-            if (i + 1 < argc)
-            {
-                char *end;
-                long value=strtol(argv[++i],&end,10);
-                if(*end!='\0' || value<1 || value>65535)
-                {
-                    write_log("Invalid port.");
-                    close_logger();
-                    return 1;
-                }
-                port = (int)value;
-            }
-        }
-        else if (strcasecmp(argv[i], "-n") == 0)
-        {
-            if (i + 1 < argc)
-            {
-                printf("Name: %s\n", argv[++i]);
-            }
-        }
-        else if (strcasecmp(argv[i],"logs")==0)
-        {
-            if(get_logs()==1)
-            {
-                printf("Error while retrieving logs.\n");
-                return 1;
-            }
-            return 0;
-        }
-        else
-        {
-            write_log("Invalid arguments.");
-            close_logger();
-            return 1;
-        }    
+        write_log("Invalid input");
+        return 1;
     }
+    switch (config.mode)
+    {
+        case MODE_LOGS:
+            get_logs();
+            return 0;
+
+        case MODE_HELP:
+            printf("Usage: ./api -p <port> -m <server|stress|logs>\n");
+            return 0;
+
+        case MODE_STRESS:
+            printf("Stress test mode not implemented yet!\n");
+            return 0;
+
+        case MODE_SERVER:
+        default:
+            break;
+    }
+
     int reuse=1;
 
     struct proxy_server server={0};
-    if(server_init(&server,port)==1)
+    if(server_init(&server,config.port)==1)
     {
         return 1;   
     }
     setsockopt(server.listen_fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));
 
-    write_log("Server it listening to 127.0.0.1:%d",port);
+    write_log("Server it listening to %s:%d",config.listen_ip,config.port);
     while(1)
     {
         int client_fd = server_accept(&server);
