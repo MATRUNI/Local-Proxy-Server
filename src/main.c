@@ -55,10 +55,15 @@ int main(int argc,char *argv[])
             break;
     }
 
+    if (config.verbose)
+    {
+        printf("Verbose mode: ON\n");
+    }
+    
     int reuse=1;
 
     struct proxy_server server={0};
-    if(server_init(&server,config.port)==1)
+    if(server_init(&server,config.port,config.listen_ip)==1)
     {
         return 1;   
     }

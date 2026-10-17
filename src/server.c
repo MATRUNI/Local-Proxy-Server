@@ -4,7 +4,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
-int server_init(struct proxy_server *server, int port)
+int server_init(struct proxy_server *server, int port,const char *ip)
 {
     if(server==NULL) return 1;
     int fd = socket(AF_INET,SOCK_STREAM,0);
@@ -19,7 +19,13 @@ int server_init(struct proxy_server *server, int port)
     struct sockaddr_in address={0};
     address.sin_family=AF_INET;
     address.sin_port=htons(port);
-    address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+    if (inet_pton(AF_INET, ip, &address.sin_addr) <= 0)
+    {
+        fprintf(stderr, "Invalid IP address: %s\n", ip);
+        close(fd);
+        return 1;
+    }
+
     if(bind(fd,(struct sockaddr *)&address,sizeof(address))==-1)
     {
         perror("bind");

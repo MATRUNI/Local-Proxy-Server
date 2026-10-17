@@ -7,7 +7,7 @@ struct proxy_server
     int port;
 };
 
-int server_init(struct proxy_server *server, int port);
+int server_init(struct proxy_server *server, int port, const char *ip);
 
 int server_accept(struct proxy_server *server);
 
