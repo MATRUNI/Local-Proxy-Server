@@ -1,8 +1,37 @@
 #include <stdio.h>
-#include "logger.h"
+#include <pthread.h>
+#include <time.h>
 #include <stdarg.h>
+#include <stdint.h>
+
+#if defined(__linux__)
+    #include <unistd.h>
+    #include <sys/syscall.h>
+#elif defined(__APPLE__)
+    #include <pthread.h>
+#elif defined(_WIN32)
+    #include <windows.h>
+#endif
+
+uint64_t get_thread_id(void)
+{
+    #if defined(__linux__)
+        return (uint64_t)syscall(SYS_gettid);
+    #elif defined(__APPLE__)
+        uint64_t tid;
+        pthread_threadid_np(NULL, &tid);
+        return tid;
+    #elif defined(_WIN32)
+        return (uint64_t)GetCurrentThreadId();
+    #else
+        return (uint64_t)(uintptr_t)pthread_self();
+    #endif
+}
+
+#include "logger.h"
 
 static FILE * logger = NULL;
+static pthread_mutex_t logger_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int init_logger()
 {
@@ -27,24 +56,54 @@ int write_log(const char *line,...)
         printf("Logger isn't availalbe.\n");
         return 1;
     }
+
+    struct timespec ts;
+    struct tm tm;
+    char timestamp[32];
+    if (clock_gettime(CLOCK_REALTIME, &ts) == -1)
+        return 1;
+
+    if (localtime_r(&ts.tv_sec, &tm) == NULL)
+        return 1;
+
+    if (strftime(timestamp, sizeof(timestamp),"%Y-%m-%d %H:%M:%S", &tm) == 0)
+        return 1;
+
+    int lock_res = pthread_mutex_lock(&logger_mutex);
+    if (lock_res != 0)
+        return 1;
+
     va_list args;
     va_start(args,line);
+    uint64_t tid = get_thread_id();
+    if(fprintf(logger,"[%s.%03ld] [TID:%lu] ",timestamp,ts.tv_nsec/1000000,tid)<0)
+    {
+        perror("fprintf");
+        goto failed;
+    }
     int res = vfprintf(logger,line,args);
+
     va_end(args);
     if(res<0)
     {
         perror("vfprintf");
-        return 1;
+        goto failed;
     }
     res = fputc('\n',logger);
-    if(res<0)
+    if(res==EOF)
     {
         perror("fputc");
-        return 1;
+        goto failed;
     }
+
     int flush_response = fflush(logger);
     if(flush_response==0)
-    return 0;
+    {
+        pthread_mutex_unlock(&logger_mutex);
+        return 0;
+    }
+    failed:
+    pthread_mutex_unlock(&logger_mutex);
     return 1;
 }
 
