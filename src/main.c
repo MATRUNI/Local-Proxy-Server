@@ -15,6 +15,14 @@
 #include "tls.h"
 #include "config.h"
 
+static volatile sig_atomic_t server_running = 1;
+
+void handle_sigint(int sig)
+{
+    (void)sig;
+    server_running = 0;
+}
+
 void *proxy_thead_worker(void *arg)
 {
     int client_fd = *(int *)arg;
@@ -83,8 +91,13 @@ int main(int argc,char *argv[])
     setsockopt(server.listen_fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));
 
     write_log("Server it listening to %s:%d",config.listen_ip,config.port);
+    struct sigaction sa = {0};
+    sa.sa_handler = handle_sigint;
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+
     pthread_t thread;
-    while(1)
+    while(server_running)
     {
         int client_fd = server_accept(&server);
         if(client_fd==-1)
@@ -116,7 +129,8 @@ int main(int argc,char *argv[])
 
         pthread_detach(thread);
     }
+    write_log("Shutting down proxy server gracefully...");
     server_destroy(&server);
-
+    close_logger();
     return 0;
 }
