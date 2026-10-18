@@ -1,9 +1,11 @@
 #include <openssl/ssl.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include "proxy.h"
 #include "tls.h"
+#include "logger.h"
 
 static SSL_CTX *global_ssl_ctx = NULL;
 
@@ -79,7 +81,16 @@ int conn_write_all(struct proxy_connection *conn, const void *buf, size_t total)
     size_t sent = 0;
     while (sent < total) {
         ssize_t n = conn->write(conn, (char *)buf + sent, total - sent);
-        if (n <= 0) return 1;
+        if (n == -1)
+        {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                write_log("Upstream server write timed out after 10s.");
+            else if (errno == EPIPE || errno == ECONNRESET)
+                write_log("Upstream server closed connection unexpectedly.");
+            else
+                perror("send");
+            return 1;
+        }
         sent += n;
     }
     return 0;

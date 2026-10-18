@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <time.h>
+
+#include "config.h"
 
 int server_init(struct proxy_server *server, int port,const char *ip)
 {
@@ -41,6 +44,17 @@ int server_init(struct proxy_server *server, int port,const char *ip)
     server->listen_fd=fd;
     server->port=port;
     return 0;
+}
+
+void set_socket_timeout(int fd)
+{
+    struct timeval timeout = {
+        .tv_sec = PROXY_TIMEOUT_SEC,
+        .tv_usec = 0
+    };
+    setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
+    setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout));
+    return;
 }
 
 int server_accept(struct proxy_server *server)

@@ -19,6 +19,7 @@ void *proxy_thead_worker(void *arg)
 {
     int client_fd = *(int *)arg;
     free(arg);
+    set_socket_timeout(client_fd);
     proxy_handle_client(client_fd);
     close(client_fd);
     return NULL;

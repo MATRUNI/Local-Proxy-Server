@@ -6,6 +6,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdbool.h>
+#include <errno.h>
 
 #include "url.h"
 #include "http.h"
@@ -13,6 +14,7 @@
 #include "proxy.h"
 #include "tls.h"
 #include "http_error.h"
+#include "server.h"
 
 #define BUFFER_SIZE     (65536)
 #define MAX_HEADER_SIZE (65536)
@@ -73,7 +75,15 @@ int send_all(int fd,const char *buffer, size_t total)
         
         if (sent == -1)
         {
-            perror("send");
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                write_log("Client write timed out (client not consuming data).");
+            }
+            else if (errno == EPIPE || errno == ECONNRESET) {
+                write_log("Client disconnected prematurely (broken pipe).");
+            }
+            else {
+                perror("send");
+            }
             return 1;
         }
         s += sent;
@@ -173,7 +183,16 @@ int stream_body(struct proxy_connection *con,bool to_client,char *buffer,size_t 
     {
         size_t to_read = remaining_bytes > (long) capacity ? capacity : (size_t) remaining_bytes;
         int n = to_client ? con->read(con, buffer, to_read) : recv(con->client_fd, buffer, to_read, 0);
-        if(n<=0) break;
+        if(n<=0)
+        {
+            if(n==0) break;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                write_log("%s read timed out after 10s.", to_client ? "Upstream" : "Client");
+            } else {
+                perror("recv");
+            }
+            return 1;
+        }
         int err = to_client ? send_all(con->client_fd, buffer, n) : conn_write_all(con, buffer, n);
         if (err == 1) return 1;
         remaining_bytes -=n;
@@ -322,8 +341,11 @@ int receiveHTTPResponse(struct proxy_connection *con)
             buffer=new_buf;
         }
         int n = con->read(con,buffer+total, capacity-total-1);
-        if(n==-1)
+        if (n == -1)
         {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                write_log("Upstream server response timed out after 10s.");
+            }
             goto cleanup_buffer;
         }
         if (n == 0) break;
@@ -454,7 +476,11 @@ int proxy_handle_client(int client_fd)
         int n = recv(client_fd,buffer+total,capacity-total-1,0);
         if (n == -1)
         {
-            perror("recv");
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                write_log("Client read timed out after 10s.");
+            } else {
+                perror("recv");
+            }
             goto cleanup_buffer;
         }
         if (n == 0)
@@ -531,6 +557,7 @@ int proxy_handle_client(int client_fd)
         send_client_error(client_fd, 502, "Failed to connect to target server (DNS or connection refused)\n");
         goto cleanup_url;
     }
+    set_socket_timeout(server_fd);
     bool is_https = (strcasecmp(url.schema,"https")==0);
     struct proxy_connection con = {
         .client_fd = client_fd,
