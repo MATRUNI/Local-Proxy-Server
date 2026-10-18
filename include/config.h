@@ -1,6 +1,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 #include <stdbool.h>
+#define THREAD_STACK_SIZE (256 * 1024)
 
 enum proxy_mode
 {
