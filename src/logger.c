@@ -3,6 +3,7 @@
 #include <time.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <string.h>
 
 #if defined(__linux__)
     #include <unistd.h>
@@ -29,9 +30,50 @@ uint64_t get_thread_id(void)
 }
 
 #include "logger.h"
+#include "config.h"
 
 static FILE * logger = NULL;
+
 static pthread_mutex_t logger_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t logger_thread_cond = PTHREAD_COND_INITIALIZER;
+#define BUCKET_BUFFER_SIZE (64 * 1024)
+static char BUCKET_A[BUCKET_BUFFER_SIZE];
+static char BUCKET_B[BUCKET_BUFFER_SIZE];
+static char *active_buffer = BUCKET_A;
+static char *waiting_buffer = BUCKET_B;
+static size_t active_buf_size = 0;
+static size_t waiting_buf_size = 0;
+static volatile int logger_running = 0;
+static pthread_t tid;
+
+void *logger_thread(void *arg)
+{
+    (void)arg;
+    while (logger_running)
+    {
+        if(pthread_mutex_lock(&logger_mutex)!=0)
+        {
+            continue;
+        }
+
+        while(active_buf_size==0 && logger_running)
+        {
+            pthread_cond_wait(&logger_thread_cond,&logger_mutex);
+        }
+        char *temp = active_buffer;
+        active_buffer = waiting_buffer;
+        waiting_buffer = temp;
+        waiting_buf_size = active_buf_size;
+        active_buf_size = 0;
+        pthread_mutex_unlock(&logger_mutex);
+        if(waiting_buf_size>0 && logger!=NULL)
+        {
+            fwrite(waiting_buffer,1,waiting_buf_size,logger);
+            fflush(logger);
+        }
+    }
+    return NULL;
+}
 
 int init_logger()
 {
@@ -40,12 +82,23 @@ int init_logger()
         return 0;
     }
     logger = fopen("logs/logger.log","a+");
+    logger_running = 1;
     if(logger==NULL)
     {
         perror("fopen");
         printf("Failed to open file.\n");
         return 1;
     }
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr,LOGGER_THREAD_STACK_SIZE);
+    if(pthread_create(&tid,&attr,logger_thread,NULL)!=0)
+    {
+        fclose(logger);
+        printf("Out of theads.\n");
+        return 1;
+    }
+    pthread_attr_destroy(&attr);
     return 0;
 }
 
@@ -56,55 +109,60 @@ int write_log(const char *line,...)
         printf("Logger isn't availalbe.\n");
         return 1;
     }
-
+    int return_value = 1;
     struct timespec ts;
     struct tm tm;
     char timestamp[32];
     if (clock_gettime(CLOCK_REALTIME, &ts) == -1)
-        return 1;
+        return return_value;
 
     if (localtime_r(&ts.tv_sec, &tm) == NULL)
-        return 1;
+        return return_value;
 
     if (strftime(timestamp, sizeof(timestamp),"%Y-%m-%d %H:%M:%S", &tm) == 0)
-        return 1;
-
-    int lock_res = pthread_mutex_lock(&logger_mutex);
-    if (lock_res != 0)
-        return 1;
+        return return_value;
 
     va_list args;
-    va_start(args,line);
     uint64_t tid = get_thread_id();
-    if(fprintf(logger,"[%s.%03ld] [TID:%lu] ",timestamp,ts.tv_nsec/1000000,tid)<0)
+    
+    char msg[1024];
+    int len = 0;
+    
+    len = snprintf(msg,sizeof(msg),"[%s.%03ld] [TID:%lu] ",timestamp,ts.tv_nsec/1000000,tid);
+    
+    if(len<0)
     {
-        perror("fprintf");
+        perror("snprintf");
         goto failed;
     }
-    int res = vfprintf(logger,line,args);
+    va_start(args,line);
+
+    int res = vsnprintf(msg+len,sizeof(msg)-len,line,args);
 
     va_end(args);
     if(res<0)
     {
-        perror("vfprintf");
+        perror("vsnprintf");
         goto failed;
     }
-    res = fputc('\n',logger);
-    if(res==EOF)
+    len+=res;
+    if ((size_t)len < sizeof(msg) - 1) {
+        msg[len++] = '\n';
+    }
+    int lock_res = pthread_mutex_lock(&logger_mutex);
+    if (lock_res != 0)
+        return 1;
+    if(active_buf_size+len<BUCKET_BUFFER_SIZE)
     {
-        perror("fputc");
-        goto failed;
-    }
+        memcpy(active_buffer + active_buf_size, msg, len);
+        active_buf_size += len; 
 
-    int flush_response = fflush(logger);
-    if(flush_response==0)
-    {
-        pthread_mutex_unlock(&logger_mutex);
-        return 0;
+        pthread_cond_signal(&logger_thread_cond);
+        return_value = 0;
     }
     failed:
     pthread_mutex_unlock(&logger_mutex);
-    return 1;
+    return return_value;
 }
 
 int get_logs()
@@ -125,6 +183,9 @@ int close_logger()
 {
     if(logger!=NULL)
     {
+        logger_running = 0;
+        pthread_cond_signal(&logger_thread_cond);
+        pthread_join(tid,NULL);
         int close_response = fclose(logger);
         logger=NULL;
         if(close_response==EOF)

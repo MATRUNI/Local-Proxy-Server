@@ -22,7 +22,8 @@ echo "[2/4] Launching proxy server on port $PORT..." | tee -a logs/api.log
 PROXY_PID=$!
 
 cleanup() {
-    kill -9 $PROXY_PID 2>/dev/null || true
+    kill -SIGINT $PROXY_PID 2>/dev/null || true
+    wait $PROXY_PID 2>/dev/null || true
     rm -f /tmp/proxy_mem_samples.log /tmp/proxy_results.log /tmp/proxy_latencies.log
 }
 trap cleanup EXIT INT TERM
@@ -67,6 +68,7 @@ TOTAL_REQS=$(( CONCURRENT_CLIENTS * REQUESTS_PER_CLIENT ))
 
 START_TIME=$(date +%s%N)
 
+CLIENT_PIDS=()
 for i in $(seq 1 $CONCURRENT_CLIENTS); do
     (
         for j in $(seq 1 $REQUESTS_PER_CLIENT); do
@@ -83,10 +85,11 @@ for i in $(seq 1 $CONCURRENT_CLIENTS); do
             fi
         done
     ) &
+    CLIENT_PIDS+=($!)
 done
 
 # Wait specifically for the client curls to finish
-wait $(jobs -p | grep -v $MONITOR_PID | grep -v $PROXY_PID)
+wait "${CLIENT_PIDS[@]}" 2>/dev/null || true
 END_TIME=$(date +%s%N)
 kill $MONITOR_PID 2>/dev/null || true
 
@@ -104,13 +107,14 @@ POST_THREADS=$(get_stat "Threads:")
 # Calculate memory metrics
 PEAK_SAMPLED_RSS=$(sort -n -k1 /tmp/proxy_mem_samples.log 2>/dev/null | tail -n 1 | awk '{print $1}')
 MAX_THREADS=$(sort -n -k3 /tmp/proxy_mem_samples.log 2>/dev/null | tail -n 1 | awk '{print $3}')
+MAX_THREADS=${MAX_THREADS:-2}
 
 # True stress footprint: difference between kernel High-Water Mark and idle baseline
 RAM_FOOTPRINT_DELTA=$(( FINAL_VMHWM - BASE_VMRSS ))
 RAM_PER_CONN=$(awk "BEGIN {printf \"%.1f\", $RAM_FOOTPRINT_DELTA / $CONCURRENT_CLIENTS}")
 
-TOTAL_SUCCESS=$(grep -c "SUCCESS" /tmp/proxy_results.log 2>/dev/null || echo 0)
-TOTAL_FAILED=$(grep -c "FAILED" /tmp/proxy_results.log 2>/dev/null || echo 0)
+TOTAL_SUCCESS=$(grep -c "SUCCESS" /tmp/proxy_results.log 2>/dev/null || true)
+TOTAL_FAILED=$(grep -c "FAILED" /tmp/proxy_results.log 2>/dev/null || true)
 
 # Calculate latency stats using python
 LATENCY_STATS=$(python3 -c '
@@ -137,7 +141,7 @@ echo -e "\n=========================================================="
 echo "          STRESS & MEMORY BENCHMARK REPORT                "
 echo "=========================================================="
 echo "Total Requests:       $TOTAL_REQS ($TOTAL_SUCCESS success, $TOTAL_FAILED failed)"
-echo "Peak Active Threads:  $MAX_THREADS (1 listener + $(( MAX_THREADS - 1 )) concurrent workers)"
+echo "Peak Active Threads:  $MAX_THREADS (1 listener + 1 logger + $(( MAX_THREADS - 2 )) concurrent workers)"
 echo ""
 echo "--- ⏱️ CONCURRENCY TIME & THROUGHPUT ---"
 echo "Burst Duration:       ${DURATION_MS} ms (${DURATION_S} seconds)"
@@ -153,6 +157,6 @@ echo "Actual RAM Added By Stress:   ${RAM_FOOTPRINT_DELTA} kB (~$(( RAM_FOOTPRIN
 echo "RAM Footprint Per Connection: ${RAM_PER_CONN} kB / client"
 echo "----------------------------------------------------------"
 echo "Cooldown VmRSS (After Load):  ${POST_VMRSS} kB"
-echo "Active Threads After Load:    ${POST_THREADS} (should be 1)"
+echo "Active Threads After Load:    ${POST_THREADS} (should be 2: listener + logger)"
 echo "=========================================================="
 } | tee -a logs/api.log

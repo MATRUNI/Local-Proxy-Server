@@ -2,6 +2,7 @@
 #define CONFIG_H
 #include <stdbool.h>
 #define THREAD_STACK_SIZE (256 * 1024)
+#define LOGGER_THREAD_STACK_SIZE (32 * 1024)
 #define PROXY_TIMEOUT_SEC 10
 
 enum proxy_mode
