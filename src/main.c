@@ -33,79 +33,37 @@ void *proxy_thead_worker(void *arg)
     return NULL;
 }
 
-int main(int argc,char *argv[])
+int run_server(const struct proxy_config *config)
 {
-    setbuf(stdout, NULL);
-    signal(SIGPIPE, SIG_IGN);
-    if(init_logger()==1)
-    {
-        printf("Failed to initialise logger.\n");
-    }
-    if(tls_init()!=0)
-    {
-        write_log(LOG_ERROR, "Failed to initialize TLS");
-        return 1;
-    }
-    struct proxy_config config = {0};
-    config.port = 17777;
-    config.listen_ip = "127.0.0.1";
-    config.verbose = false;
-    config.mode = MODE_SERVER;
-
-    if(parse_config(argc,argv,&config)==1)
-    {
-        write_log(LOG_ERROR, "Invalid input");
-        return 1;
-    }
-    switch (config.mode)
-    {
-        case MODE_LOGS:
-            get_logs();
-            return 0;
-
-        case MODE_HELP:
-            printf("Usage: ./api -p <port> -m <server|stress|logs>\n");
-            return 0;
-
-        case MODE_STRESS:
-            printf("Stress test mode not implemented yet!\n");
-            return 0;
-
-        case MODE_SERVER:
-        default:
-            break;
-    }
-
-    if (config.verbose)
+    if (config->verbose)
     {
         printf("Verbose mode: ON\n");
     }
 
-    int reuse=1;
-
-    struct proxy_server server={0};
-    if(server_init(&server,config.port,config.listen_ip)==1)
+    struct proxy_server server = {0};
+    if (server_init(&server, config->port, config->listen_ip) == 1)
     {
-        return 1;   
+        return 1;
     }
-    setsockopt(server.listen_fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));
 
-    write_log(LOG_INFO, "Server it listening to %s:%d",config.listen_ip,config.port);
+    write_log(LOG_INFO, "Server is listening to %s:%d", config->listen_ip, config->port);
+
     struct sigaction sa = {0};
     sa.sa_handler = handle_sigint;
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
     pthread_t thread;
-    while(server_running)
+    while (server_running)
     {
         int client_fd = server_accept(&server);
-        if(client_fd==-1)
+        if (client_fd == -1)
         {
             continue;
         }
+
         int *client_fd_ptr = malloc(sizeof(int));
-        if(client_fd_ptr==NULL)
+        if (client_fd_ptr == NULL)
         {
             write_log(LOG_ERROR, "Thread allocation for client failed.");
             close(client_fd);
@@ -115,22 +73,76 @@ int main(int argc,char *argv[])
 
         pthread_attr_t attr;
         pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, THREAD_STACK_SIZE);
 
-        pthread_attr_setstacksize(&attr,THREAD_STACK_SIZE);
-        
-        if(pthread_create(&thread,&attr,proxy_thead_worker,client_fd_ptr)!=0)
+        if (pthread_create(&thread, &attr, proxy_thead_worker, client_fd_ptr) != 0)
         {
             write_log(LOG_ERROR, "Out of threads.");
             free(client_fd_ptr);
             close(client_fd);
+            pthread_attr_destroy(&attr);
             continue;
         }
         pthread_attr_destroy(&attr);
-
         pthread_detach(thread);
     }
+
     write_log(LOG_INFO, "Shutting down proxy server gracefully...");
     server_destroy(&server);
-    close_logger();
     return 0;
+}
+
+int main(int argc, char *argv[])
+{
+    setbuf(stdout, NULL);
+    signal(SIGPIPE, SIG_IGN);
+
+    if (init_logger() == 1)
+    {
+        printf("Failed to initialise logger.\n");
+    }
+
+    if (tls_init() != 0)
+    {
+        write_log(LOG_ERROR, "Failed to initialize TLS");
+        close_logger();
+        return 1;
+    }
+
+    struct proxy_config config = {0};
+    config.port = 17777;
+    config.listen_ip = "127.0.0.1";
+    config.verbose = false;
+    config.mode = MODE_SERVER;
+
+    if (parse_config(argc, argv, &config) == 1)
+    {
+        write_log(LOG_ERROR, "Invalid input");
+        close_logger();
+        return 1;
+    }
+
+    int status = 0;
+    switch (config.mode)
+    {
+        case MODE_LOGS:
+            status = get_logs();
+            break;
+
+        case MODE_HELP:
+            printf("Usage: ./api -p <port> -b <ip> -m <server|stress|logs> -l <debug|info|warn|error> -v\n");
+            break;
+
+        case MODE_STRESS:
+            printf("Stress test mode not implemented yet!\n");
+            break;
+
+        case MODE_SERVER:
+        default:
+            status = run_server(&config);
+            break;
+    }
+
+    close_logger();
+    return status;
 }

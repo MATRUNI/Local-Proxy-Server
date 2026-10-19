@@ -35,7 +35,7 @@ int server_init(struct proxy_server *server, int port,const char *ip)
         close(fd);
         return 1;
     }
-    if(listen(fd,10)==-1)
+    if(listen(fd,SOMAXCONN)==-1)
     {
         perror("listen");
         close(fd);
