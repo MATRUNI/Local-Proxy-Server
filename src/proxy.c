@@ -7,6 +7,7 @@
 #include <ctype.h>
 #include <stdbool.h>
 #include <errno.h>
+#include <time.h>
 
 #include "url.h"
 #include "http.h"
@@ -76,10 +77,10 @@ int send_all(int fd,const char *buffer, size_t total)
         if (sent == -1)
         {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                write_log("Client write timed out (client not consuming data).");
+                write_log(LOG_WARN, "Client write timed out (client not consuming data).");
             }
             else if (errno == EPIPE || errno == ECONNRESET) {
-                write_log("Client disconnected prematurely (broken pipe).");
+                write_log(LOG_WARN, "Client disconnected prematurely (broken pipe).");
             }
             else {
                 perror("send");
@@ -187,7 +188,7 @@ int stream_body(struct proxy_connection *con,bool to_client,char *buffer,size_t 
         {
             if(n==0) break;
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                write_log("%s read timed out after 10s.", to_client ? "Upstream" : "Client");
+                write_log(LOG_WARN, "%s read timed out after 10s.", to_client ? "Upstream" : "Client");
             } else {
                 perror("recv");
             }
@@ -330,7 +331,7 @@ int receiveHTTPResponse(struct proxy_connection *con)
             capacity*=2;
             if(capacity>MAX_HEADER_SIZE)
             {
-                write_log("ERROR: Header too large.");
+                write_log(LOG_WARN, "Header too large.");
                 goto cleanup_buffer;
             }
             char * new_buf = realloc(buffer,capacity);
@@ -344,7 +345,7 @@ int receiveHTTPResponse(struct proxy_connection *con)
         if (n == -1)
         {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                write_log("Upstream server response timed out after 10s.");
+                write_log(LOG_WARN, "Upstream server response timed out after 10s.");
             }
             goto cleanup_buffer;
         }
@@ -396,9 +397,11 @@ int receiveHTTPResponse(struct proxy_connection *con)
 
     free(header_out_buf);
     const char *len_str = get_header_value(&res.headers, "Content-Length");
+    con->status_code = res.statusCode;
     if (len_str != NULL)
     {
         long content_length = strtol(len_str, NULL, 10);
+        con->body_bytes_sent = (content_length>0) ? (size_t)content_length : 0;
         free_response(&res);
         if(stream_body(con,true,buffer,capacity,total,headers_end,content_length)==1)
         {
@@ -410,6 +413,7 @@ int receiveHTTPResponse(struct proxy_connection *con)
         free_response(&res);
         char *body_start = headers_end+4;
         size_t initial_body_bytes = total - (body_start-buffer);
+        con->body_bytes_sent=initial_body_bytes;
         if(initial_body_bytes>0)
         {
             if(send_all(con->client_fd,body_start,initial_body_bytes)==1)
@@ -421,6 +425,7 @@ int receiveHTTPResponse(struct proxy_connection *con)
         {
             int n = con->read(con,buffer,capacity);
             if(n<=0) break;
+            con->body_bytes_sent+=n;
             if(send_all(con->client_fd,buffer,n)==1)
             {
                 goto cleanup_buffer;
@@ -432,7 +437,6 @@ int receiveHTTPResponse(struct proxy_connection *con)
     free(buffer);
     return return_code;
 }
-
 
 static void send_client_error(int client_fd, int status_code, const char *message)
 {
@@ -461,7 +465,7 @@ int proxy_handle_client(int client_fd)
             capacity*=2;
             if(capacity>MAX_HEADER_SIZE)
             {
-                write_log("ERROR: Header too large.");
+                write_log(LOG_WARN, "Header too large.");
                 send_client_error(client_fd, 413, "Request headers exceed maximum allowed size\n");
                 goto cleanup_buffer;
             }
@@ -477,7 +481,7 @@ int proxy_handle_client(int client_fd)
         if (n == -1)
         {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                write_log("Client read timed out after 10s.");
+                write_log(LOG_WARN, "Client read timed out after 10s.");
             } else {
                 perror("recv");
             }
@@ -492,7 +496,7 @@ int proxy_handle_client(int client_fd)
         buffer[total]='\0';
         if(total >=capacity-1)
         {
-            write_log("Buffer full.");
+            write_log(LOG_WARN, "Buffer full.");
             break;
         }
         headers_end = strstr(buffer,"\r\n\r\n");
@@ -527,13 +531,13 @@ int proxy_handle_client(int client_fd)
         }
         if(i==5)
         {
-            write_log("Invalid request method.");
+            write_log(LOG_WARN, "Invalid request method.");
             send_client_error(client_fd, 405, "HTTP method not supported by proxy\n");
             goto cleanup_req;
         }
     }
 
-    write_log("%s %s %s",req.method,req.path,req.version);
+    write_log(LOG_INFO, "%s %s %s",req.method,req.path,req.version);
     const char *target = get_header_value(&req.headers,"X-Target-Url");
     if(target==NULL && strncmp(req.path,"/?url=",6)==0)
     {
@@ -547,7 +551,7 @@ int proxy_handle_client(int client_fd)
     struct http_url url={0};
     if(target==NULL || parse_url((char *)target,&url)==1)
     {
-        write_log("Invalid or missing target URL.");
+        write_log(LOG_WARN, "Invalid or missing target URL.");
         send_client_error(client_fd, 400, "Invalid or missing target URL format\n");
         goto cleanup_req;
     }
@@ -586,12 +590,19 @@ int proxy_handle_client(int client_fd)
                 goto cleanup_con;
             }   
     }
-    
+    struct timespec start_ts, end_ts;
+    clock_gettime(CLOCK_MONOTONIC, &start_ts);
+
     if(receiveHTTPResponse(&con)==1)
     {
         send_client_error(client_fd, 502, "Target server closed connection without valid HTTP response\n");
         goto cleanup_con;
     }
+
+    clock_gettime(CLOCK_MONOTONIC, &end_ts);
+    long latency_ms = (end_ts.tv_sec - start_ts.tv_sec) * 1000 + (end_ts.tv_nsec - start_ts.tv_nsec) / 1000000;
+    write_log(LOG_INFO, "%s %s -> %d (%zu bytes) in %ld ms",req.method, target, con.status_code, con.body_bytes_sent ,latency_ms);
+
     res = 0;
     cleanup_con:
     conn_close(&con);

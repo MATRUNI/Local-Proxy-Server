@@ -43,7 +43,7 @@ int main(int argc,char *argv[])
     }
     if(tls_init()!=0)
     {
-        write_log("Failed to initialize TLS");
+        write_log(LOG_ERROR, "Failed to initialize TLS");
         return 1;
     }
     struct proxy_config config = {0};
@@ -54,7 +54,7 @@ int main(int argc,char *argv[])
 
     if(parse_config(argc,argv,&config)==1)
     {
-        write_log("Invalid input");
+        write_log(LOG_ERROR, "Invalid input");
         return 1;
     }
     switch (config.mode)
@@ -90,7 +90,7 @@ int main(int argc,char *argv[])
     }
     setsockopt(server.listen_fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));
 
-    write_log("Server it listening to %s:%d",config.listen_ip,config.port);
+    write_log(LOG_INFO, "Server it listening to %s:%d",config.listen_ip,config.port);
     struct sigaction sa = {0};
     sa.sa_handler = handle_sigint;
     sigaction(SIGINT, &sa, NULL);
@@ -107,7 +107,7 @@ int main(int argc,char *argv[])
         int *client_fd_ptr = malloc(sizeof(int));
         if(client_fd_ptr==NULL)
         {
-            write_log("Thread allocation for client failed.");
+            write_log(LOG_ERROR, "Thread allocation for client failed.");
             close(client_fd);
             continue;
         }
@@ -120,7 +120,7 @@ int main(int argc,char *argv[])
         
         if(pthread_create(&thread,&attr,proxy_thead_worker,client_fd_ptr)!=0)
         {
-            write_log("Out of threads.");
+            write_log(LOG_ERROR, "Out of threads.");
             free(client_fd_ptr);
             close(client_fd);
             continue;
@@ -129,7 +129,7 @@ int main(int argc,char *argv[])
 
         pthread_detach(thread);
     }
-    write_log("Shutting down proxy server gracefully...");
+    write_log(LOG_INFO, "Shutting down proxy server gracefully...");
     server_destroy(&server);
     close_logger();
     return 0;

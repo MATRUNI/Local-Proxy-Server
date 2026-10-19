@@ -84,9 +84,9 @@ int conn_write_all(struct proxy_connection *conn, const void *buf, size_t total)
         if (n == -1)
         {
             if (errno == EAGAIN || errno == EWOULDBLOCK)
-                write_log("Upstream server write timed out after 10s.");
+                write_log(LOG_WARN, "Upstream server write timed out after 10s.");
             else if (errno == EPIPE || errno == ECONNRESET)
-                write_log("Upstream server closed connection unexpectedly.");
+                write_log(LOG_WARN, "Upstream server closed connection unexpectedly.");
             else
                 perror("send");
             return 1;

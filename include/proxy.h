@@ -6,7 +6,8 @@ struct proxy_connection
     int client_fd;
     int upstream_fd;
     void *upstream_ssl;
-    
+    int status_code;
+    size_t body_bytes_sent;
     ssize_t (*read)(struct proxy_connection *conn, void *buf, size_t len);
     ssize_t (*write)(struct proxy_connection *conn, void *buf, size_t len);
 };

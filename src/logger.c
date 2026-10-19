@@ -14,6 +14,13 @@
     #include <windows.h>
 #endif
 
+#define COLOR_RESET   "\033[0m"
+#define COLOR_CYAN    "\033[1;36m"   // Bright Cyan for DEBUG
+#define COLOR_GREEN   "\033[1;32m"   // Bright Green for INFO
+#define COLOR_YELLOW  "\033[1;33m"   // Bright Yellow for WARN
+#define COLOR_RED     "\033[1;31m"   // Bold Red for ERROR
+#define COLOR_BLUE    "\033[1;34m"   // Blue for Thread ID
+
 uint64_t get_thread_id(void)
 {
     #if defined(__linux__)
@@ -45,6 +52,21 @@ static size_t active_buf_size = 0;
 static size_t waiting_buf_size = 0;
 static volatile int logger_running = 0;
 static pthread_t tid;
+
+static log_level_t current_log_level = LOG_INFO;
+
+static const char *log_value[] = {
+    "DEBUG",
+    "INFO",
+    "WARN",
+    "ERROR"
+};
+
+void change_log_level(int new_level)
+{
+    if(new_level<0 || new_level>3) return;
+    current_log_level = new_level;
+}
 
 void *logger_thread(void *arg)
 {
@@ -102,13 +124,16 @@ int init_logger()
     return 0;
 }
 
-int write_log(const char *line,...)
+int write_log(log_level_t level,const char *line,...)
 {
     if(logger==NULL || line==NULL) 
     {
         printf("Logger isn't availalbe.\n");
         return 1;
     }
+    if(level<current_log_level) return 0;
+    if(level<0 || level>3)
+        level = 1;
     int return_value = 1;
     struct timespec ts;
     struct tm tm;
@@ -128,7 +153,7 @@ int write_log(const char *line,...)
     char msg[1024];
     int len = 0;
     
-    len = snprintf(msg,sizeof(msg),"[%s.%03ld] [TID:%lu] ",timestamp,ts.tv_nsec/1000000,tid);
+    len = snprintf(msg,sizeof(msg),"[%s.%03ld] [TID:%lu] [%s] ",timestamp,ts.tv_nsec/1000000,tid,log_value[level]);
     
     if(len<0)
     {
@@ -169,15 +194,49 @@ int get_logs()
 {
     if(logger==NULL) return 1;
     rewind(logger);
-    char line[300];
-    while (fgets(line,sizeof(line),logger)!=NULL)
+    char line[1024];
+
+    while (fgets(line, sizeof(line), logger) != NULL)
     {
-        printf("%s",line);
+        char *tid_start = strstr(line, "[TID:");
+        char *tid_end = (tid_start != NULL) ? strchr(tid_start, ']') : NULL;
+
+        char *tag = NULL;
+        const char *tag_color = COLOR_RESET;
+        int tag_len = 0;
+
+        if ((tag = strstr(line, "[ERROR]")) != NULL) {
+            tag_color = COLOR_RED;
+            tag_len = 7;
+        } else if ((tag = strstr(line, "[WARN]")) != NULL) {
+            tag_color = COLOR_YELLOW;
+            tag_len = 6;
+        } else if ((tag = strstr(line, "[INFO]")) != NULL) {
+            tag_color = COLOR_GREEN;
+            tag_len = 6;
+        } else if ((tag = strstr(line, "[DEBUG]")) != NULL) {
+            tag_color = COLOR_CYAN;
+            tag_len = 7;
+        }
+
+        if (tid_start != NULL && tid_end != NULL && tag != NULL) {
+
+            printf(COLOR_RESET "%.*s" COLOR_RESET, (int)(tid_start - line), line);
+
+            printf(COLOR_BLUE "%.*s" COLOR_RESET " ", (int)(tid_end - tid_start + 1), tid_start);
+            printf("%s%.*s" COLOR_RESET, tag_color, tag_len, tag);
+
+            printf("%s", tag + tag_len);
+        } else {
+            printf("%s", line);
+        }
     }
+
     if(ferror(logger))
         return 1;
     return 0;
 }
+
 
 int close_logger()
 {

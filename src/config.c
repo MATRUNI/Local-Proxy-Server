@@ -17,7 +17,7 @@ int parse_config(int argc, char **argv, struct proxy_config *config)
                 long value=strtol(argv[++i],&end,10);
                 if(*end!='\0' || value<1 || value>65535)
                 {
-                    write_log("Invalid port.");
+                    write_log(LOG_ERROR, "Invalid port.");
                     close_logger();
                     return 1;
                 }
@@ -61,7 +61,7 @@ int parse_config(int argc, char **argv, struct proxy_config *config)
         }
         else
         {
-            write_log("Invalid arguments.");
+            write_log(LOG_ERROR, "Invalid arguments.");
             close_logger();
             return 1;
         }    
