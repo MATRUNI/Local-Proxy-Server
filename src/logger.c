@@ -158,7 +158,7 @@ int write_log(log_level_t level,const char *line,...)
     if(len<0)
     {
         perror("snprintf");
-        goto failed;
+        return return_value;
     }
     va_start(args,line);
 
@@ -168,7 +168,7 @@ int write_log(log_level_t level,const char *line,...)
     if(res<0)
     {
         perror("vsnprintf");
-        goto failed;
+        return return_value;
     }
     len+=res;
     if ((size_t)len < sizeof(msg) - 1) {
@@ -185,7 +185,7 @@ int write_log(log_level_t level,const char *line,...)
         pthread_cond_signal(&logger_thread_cond);
         return_value = 0;
     }
-    failed:
+
     pthread_mutex_unlock(&logger_mutex);
     return return_value;
 }

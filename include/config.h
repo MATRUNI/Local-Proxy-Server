@@ -18,6 +18,7 @@ struct proxy_config
     const char *listen_ip;
     bool verbose;
     enum proxy_mode mode;
+    long threads;
 };
 
 int parse_config(int argc, char **argv, struct proxy_config *config);

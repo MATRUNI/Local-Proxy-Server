@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <pthread.h>
+#include <fcntl.h>
+#include <sys/epoll.h>
 
 #include "server.h"
 #include "proxy.h"
@@ -16,6 +18,15 @@
 #include "config.h"
 
 static volatile sig_atomic_t server_running = 1;
+static pthread_attr_t attr;
+struct worker_context {
+    int id;
+    int epoll_fd;
+    pthread_t thread;
+};
+
+#define MAX_EVENTS 64
+
 
 void handle_sigint(int sig)
 {
@@ -25,12 +36,57 @@ void handle_sigint(int sig)
 
 void *proxy_thead_worker(void *arg)
 {
-    int client_fd = *(int *)arg;
-    free(arg);
-    set_socket_timeout(client_fd);
-    proxy_handle_client(client_fd);
-    close(client_fd);
-    return NULL;
+    struct worker_context *self = (struct worker_context *)arg;
+    struct epoll_event events[MAX_EVENTS];
+    while (server_running)
+    {
+        int n =epoll_wait(self->epoll_fd,events,MAX_EVENTS,500);
+        if(n==-1)
+        {
+            continue;
+        }
+        for(int i=0;i<n;i++)
+        {
+            int client_fd = events[i].data.fd;
+            set_socket_timeout(client_fd);
+            proxy_handle_client(client_fd);
+            close(client_fd);
+        }
+    }
+    close(self->epoll_fd);
+    return NULL;    
+}
+
+void get_worker_thread_attr()
+{
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, THREAD_STACK_SIZE);
+}
+
+void destroy_worker_thread_attr(void)
+{
+    pthread_attr_destroy(&attr);
+}
+
+int spawn_worker_fleet(struct worker_context *workers, int threads)
+{
+    if(workers == NULL)
+    {
+        write_log(LOG_ERROR,"Fail allocate memory for threads.");
+        return 1;
+    }
+
+    for(int i=0;i<threads;i++)
+    {
+        workers[i].id = i;
+        workers[i].epoll_fd = epoll_create1(0);
+        if (pthread_create(&workers[i].thread, &attr, proxy_thead_worker, &workers[i]) != 0)
+        {
+            write_log(LOG_ERROR, "Out of threads.");
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int run_server(const struct proxy_config *config)
@@ -52,8 +108,13 @@ int run_server(const struct proxy_config *config)
     sa.sa_handler = handle_sigint;
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
+    get_worker_thread_attr();
+    struct worker_context *workers = malloc(sizeof(struct worker_context) * config->threads);
+    if(spawn_worker_fleet(workers,(int)config->threads)==1)
+    {
+        return 1;
+    }
 
-    pthread_t thread;
     while (server_running)
     {
         int client_fd = server_accept(&server);
@@ -61,33 +122,20 @@ int run_server(const struct proxy_config *config)
         {
             continue;
         }
-
-        int *client_fd_ptr = malloc(sizeof(int));
-        if (client_fd_ptr == NULL)
-        {
-            write_log(LOG_ERROR, "Thread allocation for client failed.");
-            close(client_fd);
-            continue;
-        }
-        *client_fd_ptr = client_fd;
-
-        pthread_attr_t attr;
-        pthread_attr_init(&attr);
-        pthread_attr_setstacksize(&attr, THREAD_STACK_SIZE);
-
-        if (pthread_create(&thread, &attr, proxy_thead_worker, client_fd_ptr) != 0)
-        {
-            write_log(LOG_ERROR, "Out of threads.");
-            free(client_fd_ptr);
-            close(client_fd);
-            pthread_attr_destroy(&attr);
-            continue;
-        }
-        pthread_attr_destroy(&attr);
-        pthread_detach(thread);
+        int target_worker = client_fd % config->threads;
+        struct epoll_event ev = {
+            .data.fd = client_fd,
+            .events = EPOLLIN | EPOLLET
+        };
+        epoll_ctl(workers[target_worker].epoll_fd,EPOLL_CTL_ADD,client_fd,&ev);
     }
-
+    destroy_worker_thread_attr();
     write_log(LOG_INFO, "Shutting down proxy server gracefully...");
+    for (int i = 0; i < (int)config->threads; i++)
+    {
+        pthread_join(workers[i].thread, NULL);
+    }
+    free(workers);
     server_destroy(&server);
     return 0;
 }
@@ -108,12 +156,15 @@ int main(int argc, char *argv[])
         close_logger();
         return 1;
     }
-
-    struct proxy_config config = {0};
-    config.port = 17777;
-    config.listen_ip = "127.0.0.1";
-    config.verbose = false;
-    config.mode = MODE_SERVER;
+    long default_threads = sysconf(_SC_NPROCESSORS_ONLN);
+    default_threads = (default_threads<0) ? 4 : default_threads;
+    struct proxy_config config = {
+        .port = 17777,
+        .listen_ip = "127.0.0.1",
+        .verbose = false,
+        .mode = MODE_SERVER,
+        .threads = default_threads
+    };
 
     if (parse_config(argc, argv, &config) == 1)
     {
@@ -123,6 +174,7 @@ int main(int argc, char *argv[])
     }
 
     int status = 0;
+
     switch (config.mode)
     {
         case MODE_LOGS:
@@ -130,7 +182,7 @@ int main(int argc, char *argv[])
             break;
 
         case MODE_HELP:
-            printf("Usage: ./api -p <port> -b <ip> -m <server|stress|logs> -l <debug|info|warn|error> -v\n");
+            printf("Usage: ./api -p <port> -b <ip> -t <threads> -m <server|stress|logs> -l <debug|info|warn|error> -v\n");
             break;
 
         case MODE_STRESS:
@@ -144,5 +196,6 @@ int main(int argc, char *argv[])
     }
 
     close_logger();
+    tls_cleanup();
     return status;
 }

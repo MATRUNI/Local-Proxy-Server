@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <strings.h>
+#include <unistd.h>
 
 #include "logger.h"
 #include "config.h"
@@ -87,6 +88,51 @@ int parse_config(int argc, char **argv, struct proxy_config *config)
                 printf("Bind: %s\n", argv[++i]);
                 config->listen_ip = argv[i];
             }
+        }
+        else if (strcasecmp(argv[i], "-t") == 0 || strcasecmp(argv[i], "--threads") == 0)
+        {
+            long online_core = sysconf(_SC_NPROCESSORS_ONLN);
+            if(online_core == -1)
+            {
+                write_log(LOG_ERROR,"OS fail to detect Number of Processors currently Online.");
+                return 1;
+            }
+            if (i + 1 < argc)
+            {
+                char *end;
+                long value=strtol(argv[++i],&end,10);
+                if(*end!='\0')
+                {
+                    write_log(LOG_ERROR, "Invalid thread count: '%s' is not a number", argv[i]);
+                    return 1;
+                }
+                if(value < 1)
+                {
+                    write_log(LOG_ERROR,"Thread count must be at least 1 (got %ld). Using default (%d).",value,config->threads);
+                    write_log(LOG_INFO,"Continuing with default thread count.");
+                }
+                else if(value>online_core*2)
+                {
+                    write_log(LOG_WARN,"%ld threads on %ld cores, seriously bro? Capping to %ld.",value,online_core,online_core*2);
+                    config->threads = online_core*2;
+                    write_log(LOG_INFO,"Continuing with max threads count.");
+                }
+                else
+                {
+                    config->threads = value;
+                }
+            }
+            else
+            {
+                write_log(LOG_ERROR, "Option -t / --threads requires a numerical argument");
+                return 1;
+            }
+            write_log(LOG_INFO,"Number of Processors currently Online: %ld",online_core);
+            write_log(LOG_DEBUG,"Max number of threads allowed: %ld",online_core*2);
+        }
+        else if (strcasecmp(argv[i], "-h") == 0 || strcasecmp(argv[i], "--help") == 0)
+        {
+            config->mode = MODE_HELP;
         }
         else
         {

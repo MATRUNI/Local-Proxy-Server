@@ -12,6 +12,4 @@ void conn_close(struct proxy_connection *conn);
 
 int conn_write_all(struct proxy_connection *conn, const void *buf, size_t total);
 
-void conn_close(struct proxy_connection *conn);
-
 #endif

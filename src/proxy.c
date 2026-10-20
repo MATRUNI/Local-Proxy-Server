@@ -224,6 +224,10 @@ int sendHTTPRequest(struct proxy_connection *con, struct http_request *req ,stru
 
     for (size_t i = 0; i < req->headers.count; i++)
     {
+        if (strcasecmp(req->headers.items[i].name, "Host") == 0)
+        {
+            continue;
+        }
         temp = write_header(request+offset,sizeof(request)-offset,req->headers.items[i].name,req->headers.items[i].value);
         if(temp<0 || (size_t)temp >= sizeof(request)-offset) return 1;
         offset+=temp;
@@ -359,18 +363,7 @@ int receiveHTTPResponse(struct proxy_connection *con)
         fprintf(stderr, "Incomplete HTTP response headers.\n");
         goto cleanup_buffer;
     }
-    printf("Response buffer: \n");
-    size_t w=0;
-    while(w<total)
-    {
-        if (buffer[w] == '\r')
-            printf("\\r");
-        else if (buffer[w] == '\n')
-            printf("\\n\n");
-        else
-            printf("%c", buffer[w]);
-        w++;
-    }
+    
     struct http_response res={0};
     if(parse_response(buffer,&res)!=0)
     {
@@ -429,6 +422,9 @@ int receiveHTTPResponse(struct proxy_connection *con)
             if(send_all(con->client_fd,buffer,n)==1)
             {
                 goto cleanup_buffer;
+            }
+            if (n >= 5 && memcmp(buffer + n - 5, "0\r\n\r\n", 5) == 0) {
+                break;
             }
         }
     }
@@ -494,11 +490,6 @@ int proxy_handle_client(int client_fd)
 
         total+=n;
         buffer[total]='\0';
-        if(total >=capacity-1)
-        {
-            write_log(LOG_WARN, "Buffer full.");
-            break;
-        }
         headers_end = strstr(buffer,"\r\n\r\n");
     }
     if(headers_end==NULL)
