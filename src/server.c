@@ -4,6 +4,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <time.h>
+#include <fcntl.h>
 
 #include "config.h"
 
@@ -55,6 +56,13 @@ void set_socket_timeout(int fd)
     setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
     setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout));
     return;
+}
+
+int set_socket_non_blocking(int fd)
+{
+    int flags = fcntl(fd,F_GETFL);
+    if(flags == -1) return -1;
+    return fcntl(fd,F_SETFL,flags | O_NONBLOCK);
 }
 
 int server_accept(struct proxy_server *server)

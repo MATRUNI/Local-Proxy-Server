@@ -47,10 +47,12 @@ void *proxy_thead_worker(void *arg)
         }
         for(int i=0;i<n;i++)
         {
-            int client_fd = events[i].data.fd;
-            set_socket_timeout(client_fd);
-            proxy_handle_client(client_fd);
-            close(client_fd);
+            struct client_session *session = events[i].data.ptr;
+            set_socket_timeout(session->client_fd);
+            if(proxy_handle_client(session)!=PROXY_AGAIN)
+            {
+                session_free(session);
+            }
         }
     }
     close(self->epoll_fd);
@@ -122,9 +124,21 @@ int run_server(const struct proxy_config *config)
         {
             continue;
         }
+        int res = set_socket_non_blocking(client_fd);
+        if(res==-1)
+        {
+            close(client_fd);
+            continue;
+        }
+        struct client_session *ses = session_create(client_fd);
+        if(ses==NULL)
+        {
+            close(client_fd);
+            continue;
+        }
         int target_worker = client_fd % config->threads;
         struct epoll_event ev = {
-            .data.fd = client_fd,
+            .data.ptr = ses,
             .events = EPOLLIN | EPOLLET
         };
         epoll_ctl(workers[target_worker].epoll_fd,EPOLL_CTL_ADD,client_fd,&ev);
