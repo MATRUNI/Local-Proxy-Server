@@ -65,6 +65,13 @@ int set_socket_non_blocking(int fd)
     return fcntl(fd,F_SETFL,flags | O_NONBLOCK);
 }
 
+int set_socket_blocking(int fd)
+{
+    int flags = fcntl(fd, F_GETFL);
+    if(flags == -1) return -1;
+    return fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+}
+
 int server_accept(struct proxy_server *server)
 {
     if(server==NULL) return -1;

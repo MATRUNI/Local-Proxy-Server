@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <time.h>
+#include <sys/epoll.h>
 
 #include "url.h"
 #include "http.h"
@@ -21,17 +22,33 @@
 #define BUFFER_SIZE     (65536)
 #define MAX_HEADER_SIZE (65536)
 
+int check_socket_connected(int fd)
+{
+    int error = 0;
+    socklen_t len = sizeof(error);
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &len) < 0)
+    {
+        return -1;
+    }
+    return (error == 0) ? 0 : -1;
+}
 
-struct client_session *session_create(int client_fd)
+struct client_session *session_create(int client_fd,int epoll_fd)
 {
     struct client_session *session = malloc(sizeof(struct client_session));
     if (session == NULL) return NULL;
-
-    session->client_fd = client_fd;
-    session->state = SESSION_READING_HEADERS;
+    memset(&session->con, 0, sizeof(session->con));
+    session->con.client_fd = client_fd;
+    session->con.upstream_fd = -1;
+    session->epoll_fd = epoll_fd;
+    session->level = LEVEL_CLIENT_READ_HEADERS;
     session->capacity = 4096;
     session->total = 0;
+    session->offset = 0;
     session->buffer = malloc(session->capacity);
+    session->url= (struct http_url){0};
+    session->req = (struct http_request){0};
+
     if (session->buffer == NULL)
     {
         free(session);
@@ -49,10 +66,13 @@ void session_free(struct client_session *session)
         free(session->buffer);
         session->buffer = NULL;
     }
-    if (session->client_fd >= 0)
+    free_url(&session->url);
+    free_request(&session->req);
+    conn_close(&session->con);
+    if (session->con.client_fd >= 0)
     {
-        close(session->client_fd);
-        session->client_fd = -1;
+        close(session->con.client_fd);
+        session->con.client_fd = -1;
     }
     free(session);
 }
@@ -85,11 +105,24 @@ int proxy_handle_client(struct client_session *session)
 {
     int res = PROXY_ERROR;
     if(session==NULL) return res;
-    int client_fd = session->client_fd;
+    int client_fd = session->con.client_fd;
     char *buffer = session->buffer;
     size_t total= session->total;
     size_t capacity= session->capacity;
-    char *headers_end=NULL;
+
+    char *headers_end = (session->offset > 0) ? (buffer + session->offset) : NULL;
+
+    switch (session->level)
+    {
+        case LEVEL_CLIENT_READ_HEADERS:
+            goto LEVEL_CLIENT_READ_HEADERS;
+        case LEVEL_UPSTREAM_CONNECT:
+            goto LEVEL_UPSTREAM_CONNECT;
+        
+        default:
+            break;
+    }
+    LEVEL_CLIENT_READ_HEADERS:
     while(headers_end==NULL)
     {
         if(total >=capacity-1)
@@ -132,19 +165,23 @@ int proxy_handle_client(struct client_session *session)
         buffer[total]='\0';
         headers_end = strstr(buffer,"\r\n\r\n");
     }
+    session->level = LEVEL_UPSTREAM_CONNECT;
+    session->total = total;
+    session->buffer = buffer;
+    session->capacity = capacity;
     if(headers_end==NULL)
     {
         send_client_error(client_fd, 400, "Incomplete HTTP request headers\n");
         return res;
     }
-    struct http_request req={0};
-    if(parse_request(buffer,&req)==1)
+    session->offset = (size_t)(headers_end - buffer);
+    if(parse_request(buffer,&session->req)==1)
     {
         send_client_error(client_fd, 400, "Malformed HTTP request syntax\n");
         return res;
     }
 
-    if(strcasecmp(req.method,"OPTIONS")==0)
+    if(strcasecmp(session->req.method,"OPTIONS")==0)
     {
         if(handle_options_request(client_fd)==1)
         {
@@ -156,7 +193,7 @@ int proxy_handle_client(struct client_session *session)
     const char *methods[] = {"GET","POST","PUT","DELETE","HEAD","PATCH"};
     for(size_t i=0;i<6;i++)
     {
-        if(strcmp(req.method,methods[i])==0)
+        if(strcmp(session->req.method,methods[i])==0)
         {
             break;
         }
@@ -168,63 +205,89 @@ int proxy_handle_client(struct client_session *session)
         }
     }
 
-    write_log(LOG_INFO, "%s %s %s",req.method,req.path,req.version);
-    const char *target = get_header_value(&req.headers,"X-Target-Url");
-    if(target==NULL && strncmp(req.path,"/?url=",6)==0)
+    write_log(LOG_INFO, "%s %s %s",session->req.method,session->req.path,session->req.version);
+    const char *target = get_header_value(&session->req.headers,"X-Target-Url");
+    if(target==NULL && strncmp(session->req.path,"/?url=",6)==0)
     {
-        target = req.path+6;
+        target = session->req.path+6;
     }
-    if(target==NULL && (strncmp(req.path,"https://",8)==0 || strncmp(req.path,"http://",7)==0))
+    if(target==NULL && (strncmp(session->req.path,"https://",8)==0 || strncmp(session->req.path,"http://",7)==0))
     {
-        target = req.path;
+        target = session->req.path;
     }
 
-    struct http_url url={0};
-    if(target==NULL || parse_url((char *)target,&url)==1)
+    if(target==NULL || parse_url((char *)target,&session->url)==1)
     {
         write_log(LOG_WARN, "Invalid or missing target URL.");
         send_client_error(client_fd, 400, "Invalid or missing target URL format\n");
         goto cleanup_req;
     }
-    int server_fd = make_api_call(url.host,url.port);
+    bool in_progress = false;
+    int server_fd = make_api_call(session->url.host,session->url.port, &in_progress);
     if(server_fd==-1)
     {
         send_client_error(client_fd, 502, "Failed to connect to target server (DNS or connection refused)\n");
         goto cleanup_url;
     }
-    set_socket_timeout(server_fd);
-    bool is_https = (strcasecmp(url.schema,"https")==0);
-    struct proxy_connection con = {
-        .client_fd = client_fd,
-        .upstream_fd = server_fd,
-        .upstream_ssl = NULL
+    session->con.upstream_fd = server_fd;
+    session->con.upstream_ssl = NULL;
+
+    struct epoll_event ev = {
+        .data.ptr = session,
+        .events = EPOLLOUT | EPOLLET | EPOLLONESHOT
     };
-    if(tls_connect(&con,url.host,is_https)==1)
+    epoll_ctl(session->epoll_fd, EPOLL_CTL_ADD, server_fd, &ev);
+    session->level = LEVEL_UPSTREAM_CONNECT;
+    if(in_progress)
+    {
+        return PROXY_AGAIN;
+    }
+    
+    LEVEL_UPSTREAM_CONNECT:
+    headers_end = buffer + session->offset;
+
+    if(check_socket_connected(session->con.upstream_fd)!=0)
     {
         send_client_error(client_fd, 502, "TLS/SSL handshake with target server failed\n");
         goto cleanup_con;
     }
-    if(sendHTTPRequest(&con,&req,&url)==1)
+    epoll_ctl(session->epoll_fd, EPOLL_CTL_DEL, session->con.upstream_fd, NULL);
+    set_socket_blocking(session->con.upstream_fd);
+    set_socket_timeout(session->con.upstream_fd);
+    bool is_https = (strcasecmp(session->url.schema,"https")==0);
+    
+    if(tls_connect(&session->con,session->url.host,is_https)==1)
+    {
+        send_client_error(client_fd, 502, "TLS/SSL handshake with target server failed\n");
+        goto cleanup_con;
+    }
+
+    if(sendHTTPRequest(&session->con,&session->req,&session->url)==1)
     {
         send_client_error(client_fd, 502, "Failed to send request headers to target server\n");
         goto cleanup_con;
     }
 
-    const char *len_str = get_header_value(&req.headers, "Content-Length");
+    const char *len_str = get_header_value(&session->req.headers, "Content-Length");
     if (len_str != NULL)
     {
         long content_length = strtol(len_str, NULL, 10);
         if(content_length>0)
-            if(stream_body(&con,false,buffer,capacity,total,headers_end,content_length)==1)
+        {
+            set_socket_blocking(session->con.client_fd);
+            set_socket_timeout(session->con.client_fd);
+            int res = stream_body(&session->con,false,buffer,capacity,total,headers_end,content_length);
+            if(res==1)
             {
                 send_client_error(client_fd, 502, "Failed to stream request body to target server\n");
                 goto cleanup_con;
-            }   
+            }
+        }
     }
     struct timespec start_ts, end_ts;
     clock_gettime(CLOCK_MONOTONIC, &start_ts);
 
-    if(receiveHTTPResponse(&con)==1)
+    if(receiveHTTPResponse(&session->con)==1)
     {
         send_client_error(client_fd, 502, "Target server closed connection without valid HTTP response\n");
         goto cleanup_con;
@@ -232,14 +295,13 @@ int proxy_handle_client(struct client_session *session)
 
     clock_gettime(CLOCK_MONOTONIC, &end_ts);
     long latency_ms = (end_ts.tv_sec - start_ts.tv_sec) * 1000 + (end_ts.tv_nsec - start_ts.tv_nsec) / 1000000;
-    write_log(LOG_INFO, "%s %s -> %d (%zu bytes) in %ld ms",req.method, target, con.status_code, con.body_bytes_sent ,latency_ms);
+    write_log(LOG_INFO, "%s %s -> %d (%zu bytes) in %ld ms",session->req.method, session->url.host, session->con.status_code, session->con.body_bytes_sent ,latency_ms);
 
     res = PROXY_DONE;
     cleanup_con:
-    conn_close(&con);
+    conn_close(&session->con);
     cleanup_url:
-    free_url(&url);
     cleanup_req:
-    free_request(&req);
+    // free_request(&req);
     return res;
 }

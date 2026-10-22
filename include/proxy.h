@@ -1,6 +1,8 @@
 #ifndef PROXY_H
 #define PROXY_H
-#include <stdbool.h>
+#include "config.h"
+#include "http.h"
+#include "url.h"
 
 #define PROXY_DONE   0   // Request completed successfully
 #define PROXY_ERROR  1   // Error occurred or client disconnected
@@ -23,14 +25,19 @@ enum session_state {
 };
 
 struct client_session {
-    int client_fd;
-    enum session_state state;
+    struct proxy_connection con;
+    int epoll_fd;
+    struct http_url url;
+    session_level_t level;
+    struct http_request req;
     char *buffer;
     size_t total;
+    size_t offset;
     size_t capacity;
 };
 
-struct client_session *session_create(int client_fd);
+
+struct client_session *session_create(int client_fd, int epoll_fd);
 
 void session_free(struct client_session *session);
 

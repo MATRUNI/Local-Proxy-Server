@@ -27,7 +27,6 @@ struct worker_context {
 
 #define MAX_EVENTS 64
 
-
 void handle_sigint(int sig)
 {
     (void)sig;
@@ -48,7 +47,7 @@ void *proxy_thead_worker(void *arg)
         for(int i=0;i<n;i++)
         {
             struct client_session *session = events[i].data.ptr;
-            set_socket_timeout(session->client_fd);
+            set_socket_timeout(session->con.client_fd);
             if(proxy_handle_client(session)!=PROXY_AGAIN)
             {
                 session_free(session);
@@ -130,16 +129,16 @@ int run_server(const struct proxy_config *config)
             close(client_fd);
             continue;
         }
-        struct client_session *ses = session_create(client_fd);
+        int target_worker = client_fd % config->threads;
+        struct client_session *ses = session_create(client_fd,workers[target_worker].epoll_fd);
         if(ses==NULL)
         {
             close(client_fd);
             continue;
         }
-        int target_worker = client_fd % config->threads;
         struct epoll_event ev = {
             .data.ptr = ses,
-            .events = EPOLLIN | EPOLLET
+            .events = EPOLLIN | EPOLLET | EPOLLONESHOT
         };
         epoll_ctl(workers[target_worker].epoll_fd,EPOLL_CTL_ADD,client_fd,&ev);
     }

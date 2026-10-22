@@ -5,14 +5,16 @@
 #include <netdb.h>
 #include <string.h>
 #include <errno.h>
+#include <stdbool.h>
 
 #include "upstream.h"
 #include "logger.h"
 #include "tls.h"
+#include "server.h"
 
 #define MAX_HEADER_SIZE (65536)
 
-int connectToDNS(struct addrinfo *adr)
+int connectToDNS(struct addrinfo *adr,bool *in_progress)
 {
     for(struct addrinfo *p =adr;p!=NULL;p=p->ai_next)
     {    
@@ -21,19 +23,24 @@ int connectToDNS(struct addrinfo *adr)
         {
             continue;
         }
-        if (connect(server_fd,p->ai_addr,p->ai_addrlen) == -1)
+        set_socket_non_blocking(server_fd);
+        int res = connect(server_fd,p->ai_addr,p->ai_addrlen);
+        if(res==0)
         {
-            close(server_fd);
-        }
-        else
-        {
+            *in_progress = false;
             return server_fd;
         }
+        if (res==-1 && errno == EINPROGRESS)
+        {
+            *in_progress = true;
+            return server_fd;
+        }
+        close(server_fd);
     }
     return -1;
 }
 
-int make_api_call(const char *host, const char *port)
+int make_api_call(const char *host, const char *port, bool *in_progress)
 {
     if(host==NULL || port==NULL) return -1;
 
@@ -48,7 +55,7 @@ int make_api_call(const char *host, const char *port)
     int status=getaddrinfo(host,port,&hints,&adr);
     if(status!=0) return -1;
 
-    int server_fd=connectToDNS(adr);
+    int server_fd=connectToDNS(adr,in_progress);
     if(server_fd==-1)
     {
         freeaddrinfo(adr);
@@ -149,7 +156,9 @@ int stream_body(struct proxy_connection *con,bool to_client,char *buffer,size_t 
 {
     if(content<=0 || buffer==NULL || headers_end==NULL) return 1;
     char *body_start = headers_end+4;
-    size_t initial_body_bytes = total - (body_start-buffer);
+    size_t header_len = (size_t)(body_start - buffer);
+    size_t initial_body_bytes = (total > header_len) ? (total - header_len) : 0;
+
     if (initial_body_bytes > 0)
     {
         int err = to_client 

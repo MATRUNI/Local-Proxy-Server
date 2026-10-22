@@ -13,6 +13,8 @@ int server_accept(struct proxy_server *server);
 
 int set_socket_non_blocking(int fd);
 
+int set_socket_blocking(int fd);
+
 void set_socket_timeout(int fd);
 
 void server_destroy(struct proxy_server *server);
