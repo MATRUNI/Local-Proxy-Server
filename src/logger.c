@@ -4,6 +4,9 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdbool.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 #if defined(__linux__)
     #include <unistd.h>
@@ -41,6 +44,11 @@ static uint64_t get_thread_id(void)
 
 static FILE * logger = NULL;
 
+#define FILE_COUNT (5)
+#define MAX_FILE_SIZE (2*1024*1024)
+static int current_slot = 0;
+static size_t current_file_size = 0;
+
 static pthread_mutex_t logger_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t logger_thread_cond = PTHREAD_COND_INITIALIZER;
 #define BUCKET_BUFFER_SIZE (64 * 1024)
@@ -68,7 +76,117 @@ void change_log_level(int new_level)
     current_log_level = new_level;
 }
 
-void *logger_thread(void *arg)
+static void get_log_filepath(char *buf, size_t size, int slot, bool is_active, bool is_stress)
+{
+    const char *active_prefix = is_active ? "@" : "";
+    const char *stress_prefix = is_stress ? "~" : "";
+    snprintf(buf, size, "logs/%s%slogger_%d.log", active_prefix, stress_prefix, slot);
+}
+
+static int spawn_logger_x(char *buf)
+{
+    FILE *lg = fopen(buf,"w");
+    if(lg==NULL) return 1;
+    fclose(lg);
+    return 0;
+}
+
+// first @, 2nd ~ stress log
+
+static void last_active_file(DIR *dir,char *file_name, size_t *file_size)
+{
+    struct stat st;
+    struct dirent *entry;
+    while((entry = readdir(dir))!=NULL)
+    {
+        if(entry->d_name[0]=='@')
+        {
+            snprintf(file_name,300,"logs/%s",entry->d_name);
+            if(stat(file_name,&st)==0)
+            {
+                *file_size =(size_t) st.st_size;
+            }
+            else
+                perror("stat");
+            return;
+        }
+    }
+}
+
+static int clear_logger(char *name)
+{
+    FILE *temp = fopen(name,"w");
+    if(temp==NULL)
+    {
+        return 1;
+    }
+    fclose(temp);
+    return 0;
+}
+
+static bool file_X_exist(char *name)
+{
+    if (access(name,F_OK) == 0) {
+        return true;
+    }
+    return false;
+}
+
+static int open_file(char*file_name)
+{
+    if(file_name==NULL) return 1;
+    logger = fopen(file_name,"a+");
+    logger_running = 1;
+    if(logger==NULL)
+    {
+        perror("fopen");
+        printf("Failed to open file.\n");
+        return 1;
+    }
+    return 0;
+}
+
+static void get_next_logger_file()
+{
+    if(logger != NULL)
+    {
+        fclose(logger);
+        logger = NULL;
+    }
+    char active_name[256];
+    char archived_name[256];
+    get_log_filepath(active_name, sizeof(active_name), current_slot, true, false);
+    get_log_filepath(archived_name, sizeof(archived_name), current_slot, false, false);
+    
+    rename(active_name, archived_name);
+    int next_slot = (current_slot+1 >= FILE_COUNT) ? 0 : current_slot + 1;
+    get_log_filepath(archived_name, sizeof(archived_name), next_slot, false, false);
+    get_log_filepath(active_name, sizeof(active_name), next_slot, true, false);
+    current_slot = next_slot;
+    current_file_size = 0;
+    if(file_X_exist(archived_name))
+    {
+        rename(archived_name,active_name);
+        if(clear_logger(active_name)==1)
+        {
+            printf("Failed to clear next logger file.\n");
+            return;
+        }
+        if(open_file(active_name)==1)
+            return;
+    }
+    else
+    {
+        if(spawn_logger_x(active_name)==1)
+        {
+            printf("Failed to spawn file.\n");
+            return;
+        }
+        if(open_file(active_name)==1) return;
+    }
+}
+
+static void *logger_thread(void *arg)
 {
     (void)arg;
     while (logger_running)
@@ -91,7 +209,12 @@ void *logger_thread(void *arg)
         if(waiting_buf_size>0 && logger!=NULL)
         {
             fwrite(waiting_buffer,1,waiting_buf_size,logger);
+            current_file_size+=waiting_buf_size;
             fflush(logger);
+            if(current_file_size>=MAX_FILE_SIZE)
+            {
+                get_next_logger_file();
+            }
         }
     }
     return NULL;
@@ -103,13 +226,40 @@ int init_logger()
     {
         return 0;
     }
-    logger = fopen("logs/logger.log","a+");
-    logger_running = 1;
-    if(logger==NULL)
+    DIR *dir;
+    char file_name[300]="";
+    dir = opendir("logs");
+    if(dir==NULL)
     {
-        perror("fopen");
-        printf("Failed to open file.\n");
+        printf("Failed to open directory.\n");
         return 1;
+    }
+    last_active_file(dir,file_name,&current_file_size);
+    if(file_name[0]=='\0')
+    {
+        get_log_filepath(file_name, sizeof(file_name), current_slot, true, false);
+        if(spawn_logger_x(file_name)==1)
+        {
+            printf("Failed to create logger file.\n");
+            return 1;
+        }
+        if(open_file(file_name)==1)
+        {
+            return 1;
+        }
+    }
+    else
+    {
+        sscanf(file_name,"logs/@logger_%d.log",&current_slot);
+        if(current_file_size >= MAX_FILE_SIZE)
+        {
+            get_next_logger_file();
+            get_log_filepath(file_name, sizeof(file_name), current_slot, true, false);
+        }
+        if(open_file(file_name)==1)
+        {
+            return 1;
+        }
     }
     pthread_attr_t attr;
     pthread_attr_init(&attr);
@@ -121,6 +271,7 @@ int init_logger()
         return 1;
     }
     pthread_attr_destroy(&attr);
+    closedir(dir);
     return 0;
 }
 
@@ -237,7 +388,6 @@ int get_logs()
     return 0;
 }
 
-
 int close_logger()
 {
     if(logger!=NULL)
@@ -251,22 +401,6 @@ int close_logger()
         {
             return 1;
         }
-    }
-    return 0;
-}
-
-int clear_logger()
-{
-    if(logger==NULL) return 1;
-    logger = freopen("logs/logger.log","w",logger);
-    if(logger==NULL)
-    {
-        return 1;
-    }
-    logger = freopen("logs/logger.log","a+",logger);
-    if(logger==NULL)
-    {
-        return init_logger();
     }
     return 0;
 }

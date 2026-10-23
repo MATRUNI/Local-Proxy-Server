@@ -17,8 +17,6 @@ int write_log(log_level_t level,const char *line, ...);
 
 int get_logs();
 
-int clear_logger();
-
 int close_logger();
 
 #endif
