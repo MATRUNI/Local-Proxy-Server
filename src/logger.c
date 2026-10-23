@@ -21,7 +21,7 @@
 #define COLOR_RED     "\033[1;31m"   // Bold Red for ERROR
 #define COLOR_BLUE    "\033[1;34m"   // Blue for Thread ID
 
-uint64_t get_thread_id(void)
+static uint64_t get_thread_id(void)
 {
     #if defined(__linux__)
         return (uint64_t)syscall(SYS_gettid);

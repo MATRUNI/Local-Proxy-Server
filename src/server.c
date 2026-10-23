@@ -5,8 +5,10 @@
 #include <unistd.h>
 #include <time.h>
 #include <fcntl.h>
+#include <errno.h>
 
 #include "config.h"
+#include "logger.h"
 
 int server_init(struct proxy_server *server, int port,const char *ip)
 {
@@ -86,3 +88,40 @@ void server_destroy(struct proxy_server *server)
     server->listen_fd=-1;
     server->port=0;
 }
+
+int check_socket_connected(int fd)
+{
+    int error = 0;
+    socklen_t len = sizeof(error);
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &len) < 0)
+    {
+        return -1;
+    }
+    return (error == 0) ? 0 : -1;
+}
+
+int send_all(int fd, const char *buffer, size_t total)
+{
+    size_t s = 0;
+    while (s < total)
+    {
+        ssize_t sent = send(fd, buffer + s, total - s, 0);
+        
+        if (sent == -1)
+        {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                write_log(LOG_WARN, "Client write timed out (client not consuming data).");
+            }
+            else if (errno == EPIPE || errno == ECONNRESET) {
+                write_log(LOG_WARN, "Client disconnected prematurely (broken pipe).");
+            }
+            else {
+                perror("send");
+            }
+            return 1;
+        }
+        s += sent;
+    }
+    return 0;
+}
+

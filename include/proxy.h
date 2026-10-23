@@ -18,11 +18,18 @@ struct proxy_connection
     ssize_t (*read)(struct proxy_connection *conn, void *buf, size_t len);
     ssize_t (*write)(struct proxy_connection *conn, void *buf, size_t len);
 };
-enum session_state {
-    SESSION_READING_HEADERS,
-    SESSION_PROCESSING,
-    SESSION_DONE
-};
+
+typedef enum {
+    LEVEL_CLIENT_READ_HEADERS, 
+    LEVEL_UPSTREAM_SEND_REQ,   
+    
+    LEVEL_CLIENT_READ_BODY,    
+    LEVEL_UPSTREAM_CONNECT,    
+    LEVEL_UPSTREAM_READ_RESP,  
+
+    LEVEL_CLIENT_WRITE_RESP,   
+    LEVEL_COMPLETE             
+} session_level_t;
 
 struct client_session {
     struct proxy_connection con;

@@ -30,22 +30,22 @@ void tls_cleanup(void)
     }
 }
 
-ssize_t ssl_write_wrapper(struct proxy_connection *conn, void *buf, size_t len)
+static ssize_t ssl_write_wrapper(struct proxy_connection *conn, void *buf, size_t len)
 {
     return SSL_write((SSL *)conn->upstream_ssl,buf,len);
 }
 
-ssize_t plain_write_wrapper(struct proxy_connection *conn, void *buf, size_t len)
+static ssize_t plain_write_wrapper(struct proxy_connection *conn, void *buf, size_t len)
 {
     return send(conn->upstream_fd,buf,len,0);
 }
 
-ssize_t ssl_read_wrapper(struct proxy_connection *conn, void *buf, size_t len)
+static ssize_t ssl_read_wrapper(struct proxy_connection *conn, void *buf, size_t len)
 {
     return SSL_read((SSL *)conn->upstream_ssl,buf,len);
 }
 
-ssize_t plain_read_wrapper(struct proxy_connection *conn, void *buf, size_t len)
+static ssize_t plain_read_wrapper(struct proxy_connection *conn, void *buf, size_t len)
 {
     return recv(conn->upstream_fd,buf,len,0);
 }

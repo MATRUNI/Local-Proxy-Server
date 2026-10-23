@@ -19,19 +19,7 @@
 #include "server.h"
 #include "upstream.h"
 
-#define BUFFER_SIZE     (65536)
 #define MAX_HEADER_SIZE (65536)
-
-int check_socket_connected(int fd)
-{
-    int error = 0;
-    socklen_t len = sizeof(error);
-    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &len) < 0)
-    {
-        return -1;
-    }
-    return (error == 0) ? 0 : -1;
-}
 
 struct client_session *session_create(int client_fd,int epoll_fd)
 {
@@ -77,7 +65,7 @@ void session_free(struct client_session *session)
     free(session);
 }
 
-int handle_options_request(int client_fd)
+static int handle_options_request(int client_fd)
 {
     const char *preflight_response = 
         "HTTP/1.1 204 No Content\r\n"
@@ -276,8 +264,7 @@ int proxy_handle_client(struct client_session *session)
         {
             set_socket_blocking(session->con.client_fd);
             set_socket_timeout(session->con.client_fd);
-            int res = stream_body(&session->con,false,buffer,capacity,total,headers_end,content_length);
-            if(res==1)
+            if(stream_body(&session->con,false,buffer,capacity,total,headers_end,content_length)==1)
             {
                 send_client_error(client_fd, 502, "Failed to stream request body to target server\n");
                 goto cleanup_con;
@@ -302,6 +289,5 @@ int proxy_handle_client(struct client_session *session)
     conn_close(&session->con);
     cleanup_url:
     cleanup_req:
-    // free_request(&req);
     return res;
 }

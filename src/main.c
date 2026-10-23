@@ -27,13 +27,13 @@ struct worker_context {
 
 #define MAX_EVENTS 64
 
-void handle_sigint(int sig)
+static void handle_sigint(int sig)
 {
     (void)sig;
     server_running = 0;
 }
 
-void *proxy_thead_worker(void *arg)
+static void *proxy_thread_worker(void *arg)
 {
     struct worker_context *self = (struct worker_context *)arg;
     struct epoll_event events[MAX_EVENTS];
@@ -58,18 +58,18 @@ void *proxy_thead_worker(void *arg)
     return NULL;    
 }
 
-void get_worker_thread_attr()
+static void get_worker_thread_attr(void)
 {
     pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, THREAD_STACK_SIZE);
 }
 
-void destroy_worker_thread_attr(void)
+static void destroy_worker_thread_attr(void)
 {
     pthread_attr_destroy(&attr);
 }
 
-int spawn_worker_fleet(struct worker_context *workers, int threads)
+static int spawn_worker_fleet(struct worker_context *workers, int threads)
 {
     if(workers == NULL)
     {
@@ -81,7 +81,7 @@ int spawn_worker_fleet(struct worker_context *workers, int threads)
     {
         workers[i].id = i;
         workers[i].epoll_fd = epoll_create1(0);
-        if (pthread_create(&workers[i].thread, &attr, proxy_thead_worker, &workers[i]) != 0)
+        if (pthread_create(&workers[i].thread, &attr, proxy_thread_worker, &workers[i]) != 0)
         {
             write_log(LOG_ERROR, "Out of threads.");
             return 1;
@@ -90,7 +90,7 @@ int spawn_worker_fleet(struct worker_context *workers, int threads)
     return 0;
 }
 
-int run_server(const struct proxy_config *config)
+static int run_server(const struct proxy_config *config)
 {
     if (config->verbose)
     {

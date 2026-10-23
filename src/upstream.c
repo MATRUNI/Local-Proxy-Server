@@ -14,7 +14,7 @@
 
 #define MAX_HEADER_SIZE (65536)
 
-int connectToDNS(struct addrinfo *adr,bool *in_progress)
+static int connectToDNS(struct addrinfo *adr,bool *in_progress)
 {
     for(struct addrinfo *p =adr;p!=NULL;p=p->ai_next)
     {    
@@ -66,7 +66,7 @@ int make_api_call(const char *host, const char *port, bool *in_progress)
     return server_fd;
 }
 
-int write_header(char *buffer,size_t len,const char *name,const char *value)
+static int write_header(char *buffer,size_t len,const char *name,const char *value)
 {
     int written = snprintf(buffer,len,"%s: %s\r\n",name,value);
     if(written<0 || (size_t)written >= len)
@@ -75,32 +75,7 @@ int write_header(char *buffer,size_t len,const char *name,const char *value)
     return written;
 }
 
-int send_all(int fd,const char *buffer, size_t total)
-{
-    size_t s = 0;
-    while (s<total)
-    {
-        ssize_t sent = send(fd, buffer + s, total - s, 0);
-        
-        if (sent == -1)
-        {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                write_log(LOG_WARN, "Client write timed out (client not consuming data).");
-            }
-            else if (errno == EPIPE || errno == ECONNRESET) {
-                write_log(LOG_WARN, "Client disconnected prematurely (broken pipe).");
-            }
-            else {
-                perror("send");
-            }
-            return 1;
-        }
-        s += sent;
-    }
-    return 0;
-}
-
-int send_headers(int fd,char *new_buffer,size_t total, struct http_headers *headers, size_t remaining ,int cors_included)
+static int send_headers(int fd,char *new_buffer,size_t total, struct http_headers *headers, size_t remaining ,int cors_included)
 {
     for (size_t i = 0; i < headers->count; i++)
     {
@@ -329,6 +304,11 @@ int receiveHTTPResponse(struct proxy_connection *con)
             {
                 goto cleanup_buffer;
             }
+        }
+        if(initial_body_bytes >= 5  && memcmp(body_start + initial_body_bytes - 5, "0\r\n\r\n",5) == 0)
+        {
+            return_code = 0;
+            goto cleanup_buffer;
         }
         while(1)
         {

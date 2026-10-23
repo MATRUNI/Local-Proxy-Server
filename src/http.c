@@ -4,7 +4,7 @@
 
 #include "http.h"
 
-int parseRequestLine(char *line, struct http_request *req)
+static int parseRequestLine(char *line, struct http_request *req)
 {
     if (line == NULL || req == NULL) return 1;
 
@@ -13,8 +13,6 @@ int parseRequestLine(char *line, struct http_request *req)
 
     *method_end = '\0';
     req->method = line;
-    // char *delimiter = strchr(method_end + 1, ' ');
-    // if (delimiter == NULL) return 1;
 
     char *target_start = method_end + 1;
     char *target_end = strchr(target_start, ' ');
@@ -27,7 +25,7 @@ int parseRequestLine(char *line, struct http_request *req)
     return 0;
 }
 
-void trim(char *s)
+static void trim(char *s)
 {
     char *str = s;
     size_t len=strlen(s);
@@ -41,7 +39,7 @@ void trim(char *s)
     memmove(s,str,strlen(str)+1);
 }
 
-int add_header (char *line,struct http_header *h)
+static int add_header (char *line,struct http_header *h)
 {
     if(line==NULL || h==NULL) return 1;
     char *value=strchr(line,':');
@@ -56,7 +54,7 @@ int add_header (char *line,struct http_header *h)
     return 0;
 }
 
-int parse_headers(char *buffer,struct http_headers *headers)
+static int parse_headers(char *buffer,struct http_headers *headers)
 {
     if(buffer==NULL || headers==NULL) return 1;
     if (headers->capacity == 0)
@@ -137,7 +135,7 @@ const char *get_header_value(const struct http_headers *headers, const char *nam
     return NULL;
 }
 
-int parseResponseLine(char *line, struct http_response *res)
+static int parseResponseLine(char *line, struct http_response *res)
 {
     if (line == NULL || res == NULL) return 1;
 

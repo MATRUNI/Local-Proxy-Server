@@ -5,7 +5,7 @@
 #include <ctype.h>
 #include <stdio.h>
 
-int isNumber(char *str) {
+static int isNumber(char *str) {
     if (str == NULL || *str == '\0') return 1;
     int num = 0;
     for (int i = 0; str[i]!='\0'; i++) {
@@ -68,7 +68,7 @@ void free_url(struct http_url *url)
     url->path=NULL;
 }
 
-int validate_port(char *port)
+static int validate_port(char *port)
 {
     if (port == NULL || strcmp(port, "0") == 0)
     return 1;
@@ -81,7 +81,7 @@ int validate_port(char *port)
     return 0;
 }
 
-int validate_host(char *host)
+static int validate_host(char *host)
 {
     if (host == NULL || *host == '\0') return 1;
 
