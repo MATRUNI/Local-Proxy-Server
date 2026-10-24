@@ -14,7 +14,7 @@ echo "==========================================================" | tee -a logs/
 
 # 1. Compile
 echo "[1/4] Compiling latest binary..." | tee -a logs/api.log
-gcc -Wall -Wextra -Iinclude src/main.c src/server.c src/proxy.c src/url.c src/http.c src/logger.c src/tls.c src/http_error.c src/config.c -pthread -lssl -lcrypto -o build/api
+gcc -Wall -Wextra -Iinclude src/*.c -pthread -lssl -lcrypto -o build/api
 
 # 2. Start server directing output to logs/api.log
 echo "[2/4] Launching proxy server on port $PORT..." | tee -a logs/api.log

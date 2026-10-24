@@ -62,6 +62,14 @@ Socket (80)           TLS(443) Socket (80)           TLS(443) Socket (80)       
   - **The Janitor (Consumer)**: A dedicated background logging thread waits on a condition variable (`pthread_cond_wait`). When the active bucket fills up or the doorbell is signaled, it atomically swaps the two pointers (`char *temp = active; active = waiting; waiting = temp;`), unlocks the mutex immediately, and commits the full chunk to disk with `fwrite()` + `fflush()`.
 - Disk latency never stalls client HTTP proxying.
 
+### 4. Self-Healing 5-Slot Carousel Log Rotation
+- **Zero Log Bloat**: Prevents runaway log files by bounding logging to a fixed 5-slot ring buffer (`logger_0.log` through `logger_4.log`) capped at 2 MB per file.
+- **In-Band Active Marker (`@`)**: The currently active file is dynamically prefixed with `@` (e.g. `@logger_0.log`). When a slot reaches `MAX_FILE_SIZE`:
+  1. It drops the `@` prefix via `rename()`.
+  2. Advances slot index via boundary check `(current_slot + 1 >= FILE_COUNT) ? 0 : current_slot + 1`.
+  3. Renames the target file to `@`, truncates previous contents with `fopen(..., "w")`, and opens the append stream.
+- **Crash Recovery & Conflict Resolution**: On startup, `last_active_file()` scans `logs/` via `opendir()` and `readdir()`. If a prior crash or interrupted rotation left multiple `@` files, it calculates the true active slot across progression and wrap-around boundaries (`4 -> 0`), auto-heals by stripping the `@` from stale duplicates, and resumes appending with zero state loss.
+
 ---
 
 ## ✨ Key Features & Engineering Highlights
@@ -75,6 +83,9 @@ Socket (80)           TLS(443) Socket (80)           TLS(443) Socket (80)       
   - Strips conflicting duplicate `Host` headers to prevent 400 Bad Request rejections on strict CDN frontends (e.g. GitHub, Cloudflare).
 - **Chunked Transfer-Encoding Termination**:
   - Inspects incoming response bodies using binary memory comparisons (`memcmp`) to catch chunked termination sequences (`0\r\n\r\n`) across compressed gzip/binary streams without stalling on keep-alive socket timeouts.
+- **Bounded Carousel Log Engine**:
+  - High-performance asynchronous double-buffered ring buffer with 5 rotating slots.
+  - Zero external state files—uses in-band `@` marker with automatic collision resolution and startup healing.
 - **CORS Support**:
   - Handles preflight `OPTIONS` requests natively, returning `204 No Content` with appropriate `Access-Control-Allow-*` headers.
 - **Graceful Lifecycle Management**:
@@ -107,11 +118,12 @@ Socket (80)           TLS(443) Socket (80)           TLS(443) Socket (80)       
 │   ├── tls.c           # TLS handshake negotiation, SSL context, and socket wrappers
 │   └── url.c           # Protocol and hostname URL parsing
 ├── scripts/
-│   ├── runMain.sh      # Build and run script
-│   ├── stop.sh         # Graceful shutdown helper
-│   ├── test_memory.sh  # Kernel memory (VmRSS, VmHWM) and thread benchmark tool
-│   └── test_suite.js   # Master Node.js test suite for real webpages and concurrency bursts
-├── logs/               # Runtime logs (logger.log, test reports)
+│   ├── runMain.sh          # Build and run script
+│   ├── stop.sh             # Graceful shutdown helper
+│   ├── test_memory.sh      # Kernel memory (VmRSS, VmHWM) and thread benchmark tool
+│   ├── test_suite.js       # Master Node.js test suite for real webpages and concurrency bursts
+│   └── local_benchmark.js  # Zero-latency local throughput benchmark (2,400+ req/s)
+├── logs/               # Rotating carousel logs (@logger_X.log, logger_X.log, test reports)
 ├── build/              # Compiled binary outputs
 ├── TODO.md             # Development roadmap and historical notes
 └── README.md           # Project documentation
@@ -204,12 +216,12 @@ node scripts/test_suite.js
 ```
 
 ### 2. Kernel Memory & Concurrency Benchmark (`scripts/test_memory.sh`)
-Measures kernel memory metrics (`VmRSS`, `VmHWM`) under heavy parallel load:
+Measures kernel memory metrics (`VmRSS`, `VmHWM`) under heavy parallel load streaming 100 KB HTTPS files from remote servers:
 ```bash
 bash scripts/test_memory.sh
 ```
 
-#### Benchmark Results (8 Cores, 30 Concurrent Clients, 60 Requests)
+#### Benchmark Results (8 Cores, 30 Concurrent Clients, 60 HTTPS Requests)
 ```text
 ==========================================================
           STRESS & MEMORY BENCHMARK REPORT                
@@ -218,17 +230,49 @@ Total Requests:       60 (60 success, 0 failed)
 Peak Active Threads:  10 (1 listener + 1 logger + 8 epoll workers)
 
 --- ⏱️ CONCURRENCY TIME & THROUGHPUT ---
-Burst Duration:       24.24 seconds
-Throughput:           2.5 req/sec
-Latency (Min/Avg/Max): 1957 ms / 7156 ms / 13999 ms
+Burst Duration:       31.92 seconds
+Throughput:           1.9 req/sec
+Latency (Min/Avg/Max): 2149 ms / 8224 ms / 26745 ms
 
 --- 🧠 KERNEL RAM FOOTPRINT (VmRSS & VmHWM) ---
-Baseline VmRSS (Idle):        8924 kB (~8 MB)
-Sampled Peak VmRSS:           11820 kB (~11 MB)
-Kernel VmHWM (High Water):    11820 kB (~11 MB)
+Baseline VmRSS (Idle):        8920 kB (~8.7 MB)
+Sampled Peak VmRSS:           11880 kB (~11.6 MB)
+Kernel VmHWM (High Water):    11880 kB (~11.6 MB)
 ----------------------------------------------------------
-Actual RAM Added By Stress:   2896 kB (~2.8 MB)
-RAM Footprint Per Connection: 96.5 kB / client
+Actual RAM Added By Stress:   2960 kB (~2.8 MB)
+RAM Footprint Per Connection: 98.7 kB / client
+Cooldown VmRSS (After Load):  11880 kB
+==========================================================
+```
+
+### 3. Local Zero-Latency Proxy Benchmark (`scripts/local_benchmark.js`)
+Measures maximum raw proxying throughput, socket turnaround speed, and event-loop efficiency without external internet/DNS latency:
+```bash
+# In one terminal:
+./build/api -p 17777 -l error
+
+# In another terminal:
+node scripts/local_benchmark.js
+```
+
+#### Benchmark Results (5,000 Requests, 50 Parallel Connections)
+```text
+==========================================================
+       LOCAL ZERO-LATENCY PROXY BENCHMARK
+==========================================================
+Target Proxy   : http://127.0.0.1:17777
+Mock Upstream  : http://127.0.0.1:9099
+Total Requests : 5000
+Concurrency    : 50 parallel clients
+
+--- ⏱️ THROUGHPUT & PERFORMANCE ---
+Completed Requests : 5000 / 5000 (100.0% success)
+Total Time         : 1.61 seconds
+Throughput         : 3113.5 requests / sec
+Latency (Min)      : 5.07 ms
+Latency (Avg)      : 15.97 ms
+Latency (p95)      : 24.37 ms
+Latency (Max)      : 49.35 ms
 ==========================================================
 ```
 
@@ -244,6 +288,7 @@ This project was built from absolute scratch as a deep dive into systems program
 4. **The 256 KB Stack Discovery**: Diagnosing stack overflows during OpenSSL TLS handshakes and discovering why crypto threads require at least 256 KB stack allocations, while I/O threads can run on 32 KB.
 5. **Asynchronous Double-Buffering Logger**: Inventing the "two buckets under a tap" model, coordinating thread synchronization with `pthread_mutex_t` and `pthread_cond_t`, and avoiding disk I/O bottlenecks.
 6. **The Multi-Reactor Epoll Fleet**: Evolving from thread-per-connection to a fixed, core-pinned Epoll worker fleet, solving connection distribution, graceful termination timeouts, and binary chunked stream parsing (`memcmp`).
+7. **The Self-Healing 5-Slot Carousel Logger**: Solving unbounded log growth with a fixed-ring carousel buffer, designing in-band `@` active marker tags without external metadata files, and building crash-resilient startup recovery using `opendir()`, `readdir()`, and wrap-around ring arithmetic.
 
 ---
 
