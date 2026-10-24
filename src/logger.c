@@ -46,8 +46,10 @@ static FILE * logger = NULL;
 
 #define FILE_COUNT (5)
 #define MAX_FILE_SIZE (2*1024*1024)
+#define EMERGENCY_MAX_SIZE    (10 * 1024 * 1024)
 static int current_slot = 0;
 static size_t current_file_size = 0;
+static bool overflow_mode = false;
 
 static pthread_mutex_t logger_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t logger_thread_cond = PTHREAD_COND_INITIALIZER;
@@ -187,44 +189,51 @@ static int open_file(char*file_name)
     return 0;
 }
 
-static void get_next_logger_file()
+static int get_next_logger_file()
 {
-    if(logger != NULL)
+    int next_slot = (current_slot + 1 >= FILE_COUNT) ? 0 : current_slot + 1;
+
+    char next_active[300], next_archived[300];
+    get_log_filepath(next_active, sizeof(next_active), next_slot, true, false);
+    get_log_filepath(next_archived, sizeof(next_archived), next_slot, false, false);
+
+    char curr_active[300], curr_archived[300];
+    get_log_filepath(curr_active, sizeof(curr_active), current_slot, true, false);
+    get_log_filepath(curr_archived, sizeof(curr_archived), current_slot, false, false);
+
+    if (file_X_exist(next_archived))
+    {
+        if (rename(next_archived, next_active) != 0 || clear_logger(next_active) != 0)
+        {
+            fprintf(stderr, "[LOGGER ALERT] Failed to rotate log file! Operating in overflow mode.\n");
+            overflow_mode = true;
+            return 1;
+        }
+    }
+    else
+    {
+        if (spawn_logger_x(next_active) != 0)
+        {
+            fprintf(stderr, "[LOGGER ALERT] Failed to spawn next log file! Operating in overflow mode.\n");
+            overflow_mode = true;
+            return 1;
+        }
+    }
+    if (logger != NULL)
     {
         fclose(logger);
         logger = NULL;
     }
-    char active_name[256];
-    char archived_name[256];
-    get_log_filepath(active_name, sizeof(active_name), current_slot, true, false);
-    get_log_filepath(archived_name, sizeof(archived_name), current_slot, false, false);
-    
-    rename(active_name, archived_name);
-    int next_slot = (current_slot+1 >= FILE_COUNT) ? 0 : current_slot + 1;
-    get_log_filepath(archived_name, sizeof(archived_name), next_slot, false, false);
-    get_log_filepath(active_name, sizeof(active_name), next_slot, true, false);
+    if (open_file(next_active) != 0)
+    {
+        open_file(curr_active);
+        overflow_mode = true;
+        return 1;
+    }
+    rename(curr_active, curr_archived);
     current_slot = next_slot;
     current_file_size = 0;
-    if(file_X_exist(archived_name))
-    {
-        rename(archived_name,active_name);
-        if(clear_logger(active_name)==1)
-        {
-            printf("Failed to clear next logger file.\n");
-            return;
-        }
-        if(open_file(active_name)==1)
-            return;
-    }
-    else
-    {
-        if(spawn_logger_x(active_name)==1)
-        {
-            printf("Failed to spawn file.\n");
-            return;
-        }
-        if(open_file(active_name)==1) return;
-    }
+    return 0;
 }
 
 static void *logger_thread(void *arg)
@@ -254,7 +263,22 @@ static void *logger_thread(void *arg)
             fflush(logger);
             if(current_file_size>=MAX_FILE_SIZE)
             {
-                get_next_logger_file();
+                if(!overflow_mode)
+                {
+                    if (get_next_logger_file() != 0)
+                    {
+                        overflow_mode = true;
+                    }
+                }
+                else if (current_file_size >= EMERGENCY_MAX_SIZE)
+                {
+                    fprintf(stderr, "[LOGGER CRITICAL] 10 MB emergency limit hit! Truncating to protect disk.\n");
+                    char active_name[300];
+                    get_log_filepath(active_name, sizeof(active_name), current_slot, true, false);
+                    clear_logger(active_name);
+                    current_file_size = 0;
+                    overflow_mode = false;
+                }
             }
         }
     }
