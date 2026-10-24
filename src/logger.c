@@ -97,20 +97,61 @@ static void last_active_file(DIR *dir,char *file_name, size_t *file_size)
 {
     struct stat st;
     struct dirent *entry;
+    char at_files[FILE_COUNT][300];
+    int slot[FILE_COUNT];
+    size_t at_sizes[FILE_COUNT];
+    int count = 0;
+    int max_index=-1;
+
     while((entry = readdir(dir))!=NULL)
     {
-        if(entry->d_name[0]=='@')
+        if(entry->d_name[0]=='@'    && count < FILE_COUNT)
         {
-            snprintf(file_name,300,"logs/%s",entry->d_name);
-            if(stat(file_name,&st)==0)
+            sscanf(entry->d_name,"@logger_%d.log",&slot[count]);
+            if(max_index<0)
             {
-                *file_size =(size_t) st.st_size;
+                max_index=count;
+            }
+            else
+            {
+                if(slot[max_index]==FILE_COUNT-1 && slot[count]==0)
+                {
+                    max_index = count;
+                }
+                else if(slot[max_index] == 0 && slot[count] == FILE_COUNT-1){}
+                else
+                {
+                    max_index = (slot[count]>slot[max_index]) ? count : max_index;
+                }
+            }
+            
+            snprintf(at_files[count],300,"logs/%s",entry->d_name);
+            if(stat(at_files[count],&st)==0)
+            {
+                at_sizes[count] = (size_t) st.st_size;
             }
             else
                 perror("stat");
-            return;
+            count++;
         }
     }
+    if(count==0)
+        return;
+    else if(count==1)
+    {
+        strcpy(file_name,at_files[0]);
+        *file_size = at_sizes[0];
+        return;
+    }
+    for(int i=0;i<count;i++)
+    {
+        if(i==max_index) continue;
+        char clean[300];
+        get_log_filepath(clean, sizeof(clean), slot[i], false, false);
+        rename(at_files[i], clean);
+    }
+    strcpy(file_name,at_files[max_index]);
+    *file_size = at_sizes[max_index];
 }
 
 static int clear_logger(char *name)
