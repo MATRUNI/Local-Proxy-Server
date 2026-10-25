@@ -6,6 +6,7 @@
 #include <string.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <arpa/inet.h>
 
 #include "upstream.h"
 #include "logger.h"
@@ -43,7 +44,29 @@ static int connectToDNS(struct addrinfo *adr,bool *in_progress)
 int make_api_call(const char *host, const char *port, bool *in_progress)
 {
     if(host==NULL || port==NULL) return -1;
-
+    struct sockaddr_in sin = {0};
+    sin.sin_family = AF_INET;
+    sin.sin_port = htons(atoi(port));
+    if (inet_pton(AF_INET, host, &sin.sin_addr) == 1)
+    {
+        int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (server_fd != -1)
+        {
+            set_socket_non_blocking(server_fd);
+            int res = connect(server_fd, (struct sockaddr *)&sin, sizeof(sin));
+            if (res == 0)
+            {
+                *in_progress = false;
+                return server_fd;
+            }
+            if (res == -1 && errno == EINPROGRESS)
+            {
+                *in_progress = true;
+                return server_fd;
+            }
+            close(server_fd);
+        }
+    }
     struct addrinfo hints={0};
     struct addrinfo *adr={0};
 

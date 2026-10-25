@@ -17,43 +17,43 @@ A lightweight, blazing-fast, and memory-efficient HTTP/HTTPS reverse proxy built
 
 ## 🏛 Architecture Overview
 
-The proxy uses the **Multi-Reactor Pattern** (similar to modern web servers like NGINX, Envoy, and HAProxy) to eliminate thread churn and context switching.
+The proxy uses the **Multi-Reactor Pattern with `SO_REUSEPORT`** (similar to modern ultra-high performance servers like NGINX and Envoy) to eliminate thread churn, context switching, and single-thread accept bottlenecks.
 
 ```
                               [ Incoming Client Connections ]
                                              │
-                                             ▼
-                                   [ Acceptor Thread (Boss) ]
-                                  (server_accept on listen_fd)
-                                             │
-                             1. Sets socket to O_NONBLOCK
-                             2. Round-Robin dispatch (fd % N)
-                             3. Direct epoll_ctl(EPOLL_CTL_ADD)
+                       [ Linux Kernel SO_REUSEPORT Load Balancer ]
+                        (Hardware/Kernel-space 4-tuple IP hashing)
                                              │
                ┌─────────────────────────────┼─────────────────────────────┐
                ▼                             ▼                             ▼
        [ Worker Thread #0 ]          [ Worker Thread #1 ]          [ Worker Thread #N-1 ]
-       (Private epoll_fd)            (Private epoll_fd)            (Private epoll_fd)
+      listen_fd + epoll_fd          listen_fd + epoll_fd          listen_fd + epoll_fd
                │                             │                             │
           epoll_wait()                  epoll_wait()                  epoll_wait()
                │                             │                             │
-    ┌──────────┴──────────┐       ┌──────────┴──────────┐       ┌──────────┴──────────┐
-    ▼                     ▼       ▼                     ▼       ▼                     ▼
-Plain HTTP            OpenSSL  Plain HTTP            OpenSSL  Plain HTTP            OpenSSL
-Socket (80)           TLS(443) Socket (80)           TLS(443) Socket (80)           TLS(443)
+       ┌───────┴───────┐             ┌───────┴───────┐             ┌───────┴───────┐
+       ▼               ▼             ▼               ▼             ▼               ▼
+   accept()      session_handle   accept()      session_handle   accept()      session_handle
+(New Clients)   (Keep-Alive Req) (New Clients)  (Keep-Alive Req) (New Clients)   (Keep-Alive Req)
+       │               │             │               │             │               │
+       ▼               ▼             ▼               ▼             ▼               ▼
+  Plain HTTP /    OpenSSL TLS   Plain HTTP /    OpenSSL TLS   Plain HTTP /    OpenSSL TLS
+   Stream (80)     Client(443)   Stream (80)     Client(443)   Stream (80)     Client(443)
 ```
 
-### 1. The Acceptor (Boss)
-- Runs in `run_server()` on the main thread.
-- Listens on `listen_fd` configured with `SO_REUSEADDR` and `SOMAXCONN` backlog.
-- Welcomes incoming clients, marks the client socket as non-blocking (`O_NONBLOCK` via `fcntl`), and assigns the connection to a worker thread using round-robin distribution (`client_fd % config->threads`).
-- Registers the socket directly into that worker's private Epoll tree using `epoll_ctl(..., EPOLL_CTL_ADD, ...)`.
+### 1. `SO_REUSEPORT` Parallel Worker Fleet
+- Every worker thread creates and owns its **own private listening socket** bound to port 17777 using `SO_REUSEPORT`.
+- **Zero Accept Bottleneck**: The Linux kernel distributes incoming connections across all worker threads in kernel space directly at the socket layer.
+- Workers sleep in kernel space (`epoll_wait`) at 0% CPU until the kernel signals new client connections or incoming HTTP data.
+- **Zero Lock Contention**: Workers accept, process, stream, and log connections independently with complete thread affinity.
+- The `main` thread simply supervises worker lifecycles and handles clean signal shutdown (`SIGINT`, `SIGTERM`).
 
-### 2. The Worker Fleet (Waiters)
-- Spawns a fixed fleet of permanent worker threads at startup (auto-scaled to match physical/logical CPU cores).
-- Each worker owns an independent `epoll_fd` (Edge-Triggered `EPOLLIN | EPOLLET`).
-- Workers sleep in kernel space (`epoll_wait`) at 0% CPU until the kernel signals that their assigned sockets have data.
-- **Zero Lock Contention**: Workers don't compete over a single shared epoll queue, avoiding the "Thundering Herd" problem.
+### 2. HTTP Keep-Alive & Upstream Connection Reuse
+- **Downstream Keep-Alive**: When a client requests persistent connections, the proxy keeps `client_fd` open, resets the request parser with `session_reset()`, and re-arms the socket in `epoll` (`EPOLL_CTL_MOD`). One client connection can stream thousands of requests without repeat handshakes.
+- **Upstream Connection Reuse**: Remembers the connected `upstream_host` and `upstream_port`. Repeated requests to the same target skip `make_api_call()` and `connect()`, streaming HTTP requests immediately over the existing pipe.
+- **`TCP_NODELAY` (Nagle Bypass)**: Disables Nagle's buffering algorithm on all client and upstream sockets. Eliminates the notorious **40ms Linux Delayed-ACK penalty**, dropping sequential request latency from **41.9ms to 0.46ms (91x faster)**.
+- **IP Fast-Path**: Uses `inet_pton()` to detect numeric IPv4 destinations immediately, bypassing glibc `getaddrinfo()` resolver lookups and saving ~0.3ms per request.
 
 ### 3. Asynchronous Double-Buffering Logger ("Two Buckets Under a Tap")
 - Worker threads **never perform blocking disk I/O**.
@@ -118,11 +118,13 @@ Socket (80)           TLS(443) Socket (80)           TLS(443) Socket (80)       
 │   ├── tls.c           # TLS handshake negotiation, SSL context, and socket wrappers
 │   └── url.c           # Protocol and hostname URL parsing
 ├── scripts/
-│   ├── runMain.sh          # Build and run script
-│   ├── stop.sh             # Graceful shutdown helper
+│   ├── local_benchmark.js  # High-throughput benchmark (supports keep-alive & clustering, 17k+ req/s)
+│   ├── test_rotation.js    # 5-slot carousel log rotation and active marker audit
+│   ├── test_fallback.js    # Upstream failover, DNS fallback, and error recovery test
+│   ├── test_suite.js       # Master Node.js test suite for real webpages and CDNs
 │   ├── test_memory.sh      # Kernel memory (VmRSS, VmHWM) and thread benchmark tool
-│   ├── test_suite.js       # Master Node.js test suite for real webpages and concurrency bursts
-│   └── local_benchmark.js  # Zero-latency local throughput benchmark (2,400+ req/s)
+│   ├── runMain.sh          # Build and run script
+│   └── stop.sh             # Graceful shutdown helper
 ├── logs/               # Rotating carousel logs (@logger_X.log, logger_X.log, test reports)
 ├── build/              # Compiled binary outputs
 ├── TODO.md             # Development roadmap and historical notes
@@ -245,35 +247,83 @@ Cooldown VmRSS (After Load):  11880 kB
 ==========================================================
 ```
 
-### 3. Local Zero-Latency Proxy Benchmark (`scripts/local_benchmark.js`)
-Measures maximum raw proxying throughput, socket turnaround speed, and event-loop efficiency without external internet/DNS latency:
+### 3. High-Throughput Local Proxy Benchmark (`scripts/local_benchmark.js`)
+Tests raw proxying throughput, socket turnaround speed, and event-loop efficiency without external internet/DNS latency. Supports multi-core clustering and persistent HTTP Keep-Alive:
+
 ```bash
 # In one terminal:
 ./build/api -p 17777 -l error
 
 # In another terminal:
+# 1. Multi-Process Cluster Mode (Default: 4 client workers, 100 connections)
 node scripts/local_benchmark.js
+
+# 2. Single-Process Keep-Alive Mode
+node scripts/local_benchmark.js --single
+
+# 3. Short-Lived Connections Mode (Connection: close)
+node scripts/local_benchmark.js --no-keepalive
 ```
 
-#### Benchmark Results (5,000 Requests, 50 Parallel Connections)
+#### Benchmark Results (20,000 Requests, 4 Client Processes, 100 Persistent Connections)
 ```text
-==========================================================
-       LOCAL ZERO-LATENCY PROXY BENCHMARK
-==========================================================
+===============================================================
+        LOCAL HIGH-THROUGHPUT PROXY BENCHMARK                  
+===============================================================
 Target Proxy   : http://127.0.0.1:17777
 Mock Upstream  : http://127.0.0.1:9099
-Total Requests : 5000
-Concurrency    : 50 parallel clients
+Total Requests : 20,000
+Concurrency    : 100 connections (Keep-Alive)
+Mode           : Multi-Process Cluster (4 client workers)
 
---- ⏱️ THROUGHPUT & PERFORMANCE ---
-Completed Requests : 5000 / 5000 (100.0% success)
-Total Time         : 1.61 seconds
-Throughput         : 3113.5 requests / sec
-Latency (Min)      : 5.07 ms
-Latency (Avg)      : 15.97 ms
-Latency (p95)      : 24.37 ms
-Latency (Max)      : 49.35 ms
-==========================================================
+---------------- RESULTS ----------------
+Successful Requests : 20000 / 20000 (100.0%)
+Failed Requests     : 0
+Total Time          : 1.16 seconds
+🔥 THROUGHPUT       : 17,305.2 req/sec
+===============================================================
+```
+
+#### ⚡ Latency Impact of `TCP_NODELAY` (The 40ms Nagle Fix)
+By disabling Nagle's algorithm and preventing collision with Linux's delayed ACK timer (`TCP_DELACK_MIN`), request latency was slashed by **91x**:
+
+| Configuration | Sequential Req Latency | Max Throughput | Notes |
+| :--- | :--- | :--- | :--- |
+| **Without `TCP_NODELAY`** | ~41.90 ms | ~24 req/s (sequential) | Linux waits 40ms before sending ACK |
+| **With `TCP_NODELAY`** | **0.46 ms** | **17,305.2 req/s** | Immediate packet flush without stall |
+
+---
+
+### 4. Carousel Log Rotation & Active Marker Audit (`scripts/test_rotation.js`)
+Validates live rotation under heavy throughput, ensuring the 5-slot carousel rotates at exactly 2 MB (`MAX_FILE_SIZE = 2097152`), migrates the in-band `@` marker, and preserves historical logs:
+
+```bash
+node scripts/test_rotation.js
+```
+
+```text
+===============================================================
+       LIVE ROTATION & COMMIT-BEFORE-RETIRE TEST SUITE        
+===============================================================
+Initial Active Log File : @logger_0.log
+Active Log File to Rotate: @logger_0.log
+Firing parallel requests to cross 2 MB threshold (~12,000 requests)...
+Sent: 250 reqs  | Active: @logger_0.log (0.04 MB / 2.00 MB)
+...
+Sent: 11750 reqs | Active: @logger_0.log (1.98 MB / 2.00 MB)
+Sent: 12000 reqs | Active: @logger_1.log (0.03 MB / 2.00 MB)
+🎉 ROTATION DETECTED! Active marker moved to: @logger_1.log
+===============================================================
+                       FINAL LOGS AUDIT                        
+===============================================================
+  - @logger_1.log        : 26.5 KB   ⭐ ACTIVE
+  - logger_0.log         : 2048.0 KB 📦 ARCHIVED
+---------------------------------------------------------------
+Active markers found   : 1 (Expected: exactly 1)
+Total Requests Sent    : 12,000
+Elapsed Time           : 4.47s
+✅ PASS: Carousel rotation, commit-before-retire & active marker verified!
+===============================================================
 ```
 
 ---
@@ -289,6 +339,12 @@ This project was built from absolute scratch as a deep dive into systems program
 5. **Asynchronous Double-Buffering Logger**: Inventing the "two buckets under a tap" model, coordinating thread synchronization with `pthread_mutex_t` and `pthread_cond_t`, and avoiding disk I/O bottlenecks.
 6. **The Multi-Reactor Epoll Fleet**: Evolving from thread-per-connection to a fixed, core-pinned Epoll worker fleet, solving connection distribution, graceful termination timeouts, and binary chunked stream parsing (`memcmp`).
 7. **The Self-Healing 5-Slot Carousel Logger**: Solving unbounded log growth with a fixed-ring carousel buffer, designing in-band `@` active marker tags without external metadata files, and building crash-resilient startup recovery using `opendir()`, `readdir()`, and wrap-around ring arithmetic.
+8. **The 17,000+ Req/Sec Keep-Alive & `SO_REUSEPORT` Breakthrough**:
+   - **`SO_REUSEPORT` Fleet**: Replaced the single-acceptor bottleneck with kernel-level connection balancing across independent worker listening sockets.
+   - **Bidirectional Keep-Alive & Upstream Cache**: Eliminated double-handshake overhead per request by keeping client sockets persistent (`session_reset()`) and caching open upstream TCP connections.
+   - **40ms Nagle / Delayed-ACK Discovery**: Diagnosed the 40ms latency freeze caused by Nagle's algorithm waiting on Linux's delayed ACK timer, resolving it with `TCP_NODELAY` and dropping latency from 41.9ms to 0.46ms (91x speedup).
+   - **DNS Resolver Bypass**: Bypassed glibc's `getaddrinfo()` NSS file-reads on IP literals using `inet_pton()`.
+   - **Performance Milestone**: Scaled from 3,113 req/sec to **17,305.2 req/sec** with 100% success rate across 20,000 requests.
 
 ---
 

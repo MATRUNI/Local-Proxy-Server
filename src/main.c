@@ -22,6 +22,7 @@ static pthread_attr_t attr;
 struct worker_context {
     int id;
     int epoll_fd;
+    int listen_fd;
     pthread_t thread;
 };
 
@@ -46,14 +47,47 @@ static void *proxy_thread_worker(void *arg)
         }
         for(int i=0;i<n;i++)
         {
-            struct client_session *session = events[i].data.ptr;
-            set_socket_timeout(session->con.client_fd);
-            if(proxy_handle_client(session)!=PROXY_AGAIN)
+            if(events[i].data.ptr==NULL)
             {
-                session_free(session);
+                while (1)
+                {
+                    int client_fd = accept(self->listen_fd,NULL,NULL);
+                    if (client_fd == -1)
+                    {
+                        break;
+                    }
+                    int res = set_socket_non_blocking(client_fd);
+                    set_socket_nodelay(client_fd);
+                    if(res==-1)
+                    {
+                        close(client_fd);
+                        continue;
+                    }
+                    struct client_session *ses = session_create(client_fd,self->epoll_fd);
+                    if(ses==NULL)
+                    {
+                        close(client_fd);
+                        continue;
+                    }
+                    struct epoll_event ev = {
+                        .data.ptr = ses,
+                        .events = EPOLLIN | EPOLLET | EPOLLONESHOT
+                    };
+                    epoll_ctl(self->epoll_fd,EPOLL_CTL_ADD,client_fd,&ev);
+                }
+            }
+            else
+            {
+                struct client_session *session = events[i].data.ptr;
+                set_socket_timeout(session->con.client_fd);
+                if(proxy_handle_client(session)!=PROXY_AGAIN)
+                {
+                    session_free(session);
+                }
             }
         }
     }
+    close(self->listen_fd);
     close(self->epoll_fd);
     return NULL;    
 }
@@ -69,7 +103,7 @@ static void destroy_worker_thread_attr(void)
     pthread_attr_destroy(&attr);
 }
 
-static int spawn_worker_fleet(struct worker_context *workers, int threads)
+static int spawn_worker_fleet(struct worker_context *workers, int threads,int port, const char *ip)
 {
     if(workers == NULL)
     {
@@ -81,6 +115,19 @@ static int spawn_worker_fleet(struct worker_context *workers, int threads)
     {
         workers[i].id = i;
         workers[i].epoll_fd = epoll_create1(0);
+        struct proxy_server srv = {0};
+        if(server_init(&srv, port, ip) != 0)
+        {
+            write_log(LOG_ERROR, "Failed to init listener socket for worker %d", i);
+            return 1;
+        }
+        set_socket_non_blocking(srv.listen_fd);
+        workers[i].listen_fd = srv.listen_fd;
+        struct epoll_event ev = {
+            .data.ptr = NULL,
+            .events = EPOLLIN | EPOLLET
+        };
+        epoll_ctl(workers[i].epoll_fd,EPOLL_CTL_ADD,workers[i].listen_fd,&ev);
         if (pthread_create(&workers[i].thread, &attr, proxy_thread_worker, &workers[i]) != 0)
         {
             write_log(LOG_ERROR, "Out of threads.");
@@ -97,12 +144,6 @@ static int run_server(const struct proxy_config *config)
         printf("Verbose mode: ON\n");
     }
 
-    struct proxy_server server = {0};
-    if (server_init(&server, config->port, config->listen_ip) == 1)
-    {
-        return 1;
-    }
-
     write_log(LOG_INFO, "Server is listening to %s:%d", config->listen_ip, config->port);
 
     struct sigaction sa = {0};
@@ -111,36 +152,14 @@ static int run_server(const struct proxy_config *config)
     sigaction(SIGTERM, &sa, NULL);
     get_worker_thread_attr();
     struct worker_context *workers = malloc(sizeof(struct worker_context) * config->threads);
-    if(spawn_worker_fleet(workers,(int)config->threads)==1)
+    if(spawn_worker_fleet(workers,(int)config->threads,config->port,config->listen_ip)==1)
     {
         return 1;
     }
 
     while (server_running)
     {
-        int client_fd = server_accept(&server);
-        if (client_fd == -1)
-        {
-            continue;
-        }
-        int res = set_socket_non_blocking(client_fd);
-        if(res==-1)
-        {
-            close(client_fd);
-            continue;
-        }
-        int target_worker = client_fd % config->threads;
-        struct client_session *ses = session_create(client_fd,workers[target_worker].epoll_fd);
-        if(ses==NULL)
-        {
-            close(client_fd);
-            continue;
-        }
-        struct epoll_event ev = {
-            .data.ptr = ses,
-            .events = EPOLLIN | EPOLLET | EPOLLONESHOT
-        };
-        epoll_ctl(workers[target_worker].epoll_fd,EPOLL_CTL_ADD,client_fd,&ev);
+        sleep(1);
     }
     destroy_worker_thread_attr();
     write_log(LOG_INFO, "Shutting down proxy server gracefully...");
@@ -149,7 +168,6 @@ static int run_server(const struct proxy_config *config)
         pthread_join(workers[i].thread, NULL);
     }
     free(workers);
-    server_destroy(&server);
     return 0;
 }
 

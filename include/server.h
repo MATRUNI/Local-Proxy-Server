@@ -11,6 +11,8 @@ struct proxy_server
 
 int server_init(struct proxy_server *server, int port, const char *ip);
 
+int set_socket_nodelay(int fd);
+
 int server_accept(struct proxy_server *server);
 
 int set_socket_non_blocking(int fd);

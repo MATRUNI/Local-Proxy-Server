@@ -6,6 +6,7 @@
 #include <time.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <netinet/tcp.h>
 
 #include "config.h"
 #include "logger.h"
@@ -21,7 +22,7 @@ int server_init(struct proxy_server *server, int port,const char *ip)
     }
     int reuse=1;
     setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));
-
+    setsockopt(fd,SOL_SOCKET,SO_REUSEPORT,&reuse,sizeof(reuse));
     struct sockaddr_in address={0};
     address.sin_family=AF_INET;
     address.sin_port=htons(port);
@@ -72,6 +73,12 @@ int set_socket_blocking(int fd)
     int flags = fcntl(fd, F_GETFL);
     if(flags == -1) return -1;
     return fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+}
+
+int set_socket_nodelay(int fd)
+{
+    int flag = 1;
+    return setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 }
 
 int server_accept(struct proxy_server *server)

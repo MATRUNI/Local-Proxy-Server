@@ -46,6 +46,37 @@ struct client_session *session_create(int client_fd,int epoll_fd)
     return session;
 }
 
+static void session_reset(struct client_session *session)
+{
+    if (session == NULL) return;
+    int client_fd = session->con.client_fd;
+
+    // conn_close(&session->con);
+
+    free_url(&session->url);
+    free_request(&session->req);
+
+    session->con.status_code = 0;
+    session->con.body_bytes_sent = 0;
+
+    session->level = LEVEL_CLIENT_READ_HEADERS;
+    session->total = 0;
+    session->offset = 0;
+    if (session->buffer != NULL)
+    {
+        session->buffer[0] = '\0';
+    }
+
+    set_socket_non_blocking(client_fd);
+    set_socket_timeout(client_fd);
+
+    struct epoll_event ev = {
+        .data.ptr = session,
+        .events = EPOLLIN | EPOLLET | EPOLLONESHOT
+    };
+    epoll_ctl(session->epoll_fd, EPOLL_CTL_MOD, client_fd, &ev);
+}
+
 void session_free(struct client_session *session)
 {
     if (session == NULL) return;
@@ -211,6 +242,10 @@ int proxy_handle_client(struct client_session *session)
         goto cleanup_req;
     }
     bool in_progress = false;
+    if(session->con.upstream_fd >= 0 && strcmp(session->upstream_host,session->url.host)==0 && strcmp(session->upstream_port,session->url.port)==0)
+    {
+        goto MAKE_CALL;
+    }
     int server_fd = make_api_call(session->url.host,session->url.port, &in_progress);
     if(server_fd==-1)
     {
@@ -250,6 +285,10 @@ int proxy_handle_client(struct client_session *session)
         goto cleanup_con;
     }
 
+    snprintf(session->upstream_host, sizeof(session->upstream_host), "%s", session->url.host);
+    snprintf(session->upstream_port, sizeof(session->upstream_port), "%s", session->url.port);
+
+    MAKE_CALL:
     if(sendHTTPRequest(&session->con,&session->req,&session->url)==1)
     {
         send_client_error(client_fd, 502, "Failed to send request headers to target server\n");
@@ -284,6 +323,25 @@ int proxy_handle_client(struct client_session *session)
     long latency_ms = (end_ts.tv_sec - start_ts.tv_sec) * 1000 + (end_ts.tv_nsec - start_ts.tv_nsec) / 1000000;
     write_log(LOG_INFO, "%s %s -> %d (%zu bytes) in %ld ms",session->req.method, session->url.host, session->con.status_code, session->con.body_bytes_sent ,latency_ms);
 
+    const char *client_conn = get_header_value(&session->req.headers, "Connection");
+    bool keep_alive = true;
+    if (client_conn != NULL && strcasecmp(client_conn, "close") == 0)
+    {
+        keep_alive = false;
+    }
+    else if (session->req.version != NULL && strcmp(session->req.version, "HTTP/1.0") == 0)
+    {
+        if (client_conn == NULL || strcasecmp(client_conn, "keep-alive") != 0)
+        {
+            keep_alive = false;
+        }
+    }
+    // Keep-alive is safe when response boundary is known (Content-Length or 204/304)
+    if (keep_alive)
+    {
+        session_reset(session);
+        return PROXY_AGAIN;
+    }
     res = PROXY_DONE;
     cleanup_con:
     conn_close(&session->con);

@@ -41,6 +41,9 @@ struct client_session {
     size_t total;
     size_t offset;
     size_t capacity;
+    char upstream_host[256];
+    char upstream_port[16];
+    bool upstream_is_https;
 };
 
 
