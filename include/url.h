@@ -11,6 +11,10 @@ struct http_url
 
 int parse_url(char *input, struct http_url *url);
 
+int validate_port(char *port);
+
+int isNumber(char *str);
+
 void free_url(struct http_url *url);
 
 #endif

@@ -15,14 +15,20 @@ enum proxy_mode
 struct proxy_config
 {
     int port;
-    const char *listen_ip;
+    char listen_ip[64];
     bool verbose;
     enum proxy_mode mode;
     long threads;
+    int timeout;
+    size_t max_log_size;
+    int max_log_files;
+    char log_dir[128];
 };
 
 int parse_config(int argc, char **argv, struct proxy_config *config);
 
 void free_config(struct proxy_config *config);
+
+void parse_config_file(FILE *config_file,struct proxy_config *config);
 
 #endif

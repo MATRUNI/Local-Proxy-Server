@@ -194,8 +194,19 @@ int main(int argc, char *argv[])
         .listen_ip = "127.0.0.1",
         .verbose = false,
         .mode = MODE_SERVER,
-        .threads = default_threads
+        .threads = default_threads,
+        .timeout = 10,
+        .max_log_files = 5,
+        .max_log_size = 2*1024*1024
     };
+    FILE *config_file = fopen("proxy.conf","r");
+    if(config_file!=NULL)
+    {
+        parse_config_file(config_file,&config);
+        fclose(config_file);
+    }
+    else
+    write_log(LOG_ERROR, "Can't locate config file.");
 
     if (parse_config(argc, argv, &config) == 1)
     {
