@@ -11,8 +11,11 @@
 #include "config.h"
 #include "logger.h"
 
-int server_init(struct proxy_server *server, int port,const char *ip)
+static int socket_timeout;
+
+int server_init(struct proxy_server *server, int port,const char *ip, int timeout)
 {
+    socket_timeout = timeout;
     if(server==NULL) return 1;
     int fd = socket(AF_INET,SOCK_STREAM,0);
     if(fd==-1)
@@ -53,7 +56,7 @@ int server_init(struct proxy_server *server, int port,const char *ip)
 void set_socket_timeout(int fd)
 {
     struct timeval timeout = {
-        .tv_sec = PROXY_TIMEOUT_SEC,
+        .tv_sec = socket_timeout,
         .tv_usec = 0
     };
     setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));

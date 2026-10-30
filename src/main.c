@@ -103,7 +103,7 @@ static void destroy_worker_thread_attr(void)
     pthread_attr_destroy(&attr);
 }
 
-static int spawn_worker_fleet(struct worker_context *workers, int threads,int port, const char *ip)
+static int spawn_worker_fleet(struct worker_context *workers, int threads,int port, const char *ip, int timeout)
 {
     if(workers == NULL)
     {
@@ -116,7 +116,7 @@ static int spawn_worker_fleet(struct worker_context *workers, int threads,int po
         workers[i].id = i;
         workers[i].epoll_fd = epoll_create1(0);
         struct proxy_server srv = {0};
-        if(server_init(&srv, port, ip) != 0)
+        if(server_init(&srv, port, ip,timeout) != 0)
         {
             write_log(LOG_ERROR, "Failed to init listener socket for worker %d", i);
             return 1;
@@ -152,7 +152,7 @@ static int run_server(const struct proxy_config *config)
     sigaction(SIGTERM, &sa, NULL);
     get_worker_thread_attr();
     struct worker_context *workers = malloc(sizeof(struct worker_context) * config->threads);
-    if(spawn_worker_fleet(workers,(int)config->threads,config->port,config->listen_ip)==1)
+    if(spawn_worker_fleet(workers,(int)config->threads,config->port,config->listen_ip,config->timeout)==1)
     {
         return 1;
     }
@@ -176,11 +176,6 @@ int main(int argc, char *argv[])
     setbuf(stdout, NULL);
     signal(SIGPIPE, SIG_IGN);
 
-    if (init_logger() == 1)
-    {
-        printf("Failed to initialise logger.\n");
-    }
-
     if (tls_init() != 0)
     {
         write_log(LOG_ERROR, "Failed to initialize TLS");
@@ -197,7 +192,8 @@ int main(int argc, char *argv[])
         .threads = default_threads,
         .timeout = 10,
         .max_log_files = 5,
-        .max_log_size = 2*1024*1024
+        .max_log_size = 2*1024*1024,
+        .log_dir = "logs"
     };
     FILE *config_file = fopen("proxy.conf","r");
     if(config_file!=NULL)
@@ -205,8 +201,10 @@ int main(int argc, char *argv[])
         parse_config_file(config_file,&config);
         fclose(config_file);
     }
-    else
-    write_log(LOG_ERROR, "Can't locate config file.");
+    if (init_logger(config.log_dir,config.max_log_files,config.max_log_size) == 1)
+    {
+        printf("Failed to initialise logger.\n");
+    }
 
     if (parse_config(argc, argv, &config) == 1)
     {

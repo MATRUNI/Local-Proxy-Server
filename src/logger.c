@@ -44,9 +44,12 @@ static uint64_t get_thread_id(void)
 
 static FILE * logger = NULL;
 
-#define FILE_COUNT (5)
-#define MAX_FILE_SIZE (2*1024*1024)
 #define EMERGENCY_MAX_SIZE    (10 * 1024 * 1024)
+
+static size_t max_file_size;
+static int max_log_files;
+static char log_dir[64];
+
 static int current_slot = 0;
 static size_t current_file_size = 0;
 static bool overflow_mode = false;
@@ -82,7 +85,7 @@ static void get_log_filepath(char *buf, size_t size, int slot, bool is_active, b
 {
     const char *active_prefix = is_active ? "@" : "";
     const char *stress_prefix = is_stress ? "~" : "";
-    snprintf(buf, size, "logs/%s%slogger_%d.log", active_prefix, stress_prefix, slot);
+    snprintf(buf, size, "%s/%s%slogger_%d.log", log_dir , active_prefix, stress_prefix, slot);
 }
 
 static int spawn_logger_x(char *buf)
@@ -99,15 +102,15 @@ static void last_active_file(DIR *dir,char *file_name, size_t *file_size)
 {
     struct stat st;
     struct dirent *entry;
-    char at_files[FILE_COUNT][300];
-    int slot[FILE_COUNT];
-    size_t at_sizes[FILE_COUNT];
+    char at_files[max_log_files][512];
+    int slot[max_log_files];
+    size_t at_sizes[max_log_files];
     int count = 0;
     int max_index=-1;
 
     while((entry = readdir(dir))!=NULL)
     {
-        if(entry->d_name[0]=='@'    && count < FILE_COUNT)
+        if(entry->d_name[0]=='@'    && count < max_log_files)
         {
             sscanf(entry->d_name,"@logger_%d.log",&slot[count]);
             if(max_index<0)
@@ -116,18 +119,18 @@ static void last_active_file(DIR *dir,char *file_name, size_t *file_size)
             }
             else
             {
-                if(slot[max_index]==FILE_COUNT-1 && slot[count]==0)
+                if(slot[max_index]==max_log_files-1 && slot[count]==0)
                 {
                     max_index = count;
                 }
-                else if(slot[max_index] == 0 && slot[count] == FILE_COUNT-1){}
+                else if(slot[max_index] == 0 && slot[count] == max_log_files-1){}
                 else
                 {
                     max_index = (slot[count]>slot[max_index]) ? count : max_index;
                 }
             }
             
-            snprintf(at_files[count],300,"logs/%s",entry->d_name);
+            snprintf(at_files[count],sizeof(at_files[count]),"%s/%s",log_dir,entry->d_name);
             if(stat(at_files[count],&st)==0)
             {
                 at_sizes[count] = (size_t) st.st_size;
@@ -191,7 +194,7 @@ static int open_file(char*file_name)
 
 static int get_next_logger_file()
 {
-    int next_slot = (current_slot + 1 >= FILE_COUNT) ? 0 : current_slot + 1;
+    int next_slot = (current_slot + 1 >= max_log_files) ? 0 : current_slot + 1;
 
     char next_active[300], next_archived[300];
     get_log_filepath(next_active, sizeof(next_active), next_slot, true, false);
@@ -261,7 +264,7 @@ static void *logger_thread(void *arg)
             fwrite(waiting_buffer,1,waiting_buf_size,logger);
             current_file_size+=waiting_buf_size;
             fflush(logger);
-            if(current_file_size>=MAX_FILE_SIZE)
+            if(current_file_size>=max_file_size)
             {
                 if(!overflow_mode)
                 {
@@ -285,15 +288,18 @@ static void *logger_thread(void *arg)
     return NULL;
 }
 
-int init_logger()
+int init_logger(char *log_file_dir, int log_file_count, size_t log_file_size)
 {
     if(logger!=NULL)
     {
         return 0;
     }
+    strcpy(log_dir,log_file_dir);
+    max_file_size = log_file_size;
+    max_log_files = log_file_count;
     DIR *dir;
     char file_name[300]="";
-    dir = opendir("logs");
+    dir = opendir(log_dir);
     if(dir==NULL)
     {
         printf("Failed to open directory.\n");
@@ -315,8 +321,8 @@ int init_logger()
     }
     else
     {
-        sscanf(file_name,"logs/@logger_%d.log",&current_slot);
-        if(current_file_size >= MAX_FILE_SIZE)
+        sscanf(file_name,"%*[^@]@logger_%d.log",&current_slot);
+        if(current_file_size >= max_file_size)
         {
             get_next_logger_file();
             get_log_filepath(file_name, sizeof(file_name), current_slot, true, false);

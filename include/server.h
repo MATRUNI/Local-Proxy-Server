@@ -9,7 +9,7 @@ struct proxy_server
     int port;
 };
 
-int server_init(struct proxy_server *server, int port, const char *ip);
+int server_init(struct proxy_server *server, int port, const char *ip, int timeout);
 
 int set_socket_nodelay(int fd);
 

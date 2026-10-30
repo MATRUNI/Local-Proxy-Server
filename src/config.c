@@ -302,6 +302,13 @@ void make_changes(char *key, char *val, struct proxy_config *config)
         }
         return;
     }
+    else if (strcasecmp(key, "log_level") == 0)
+    {    
+        if (strcasecmp(val, "debug") == 0) change_log_level(LOG_DEBUG);
+        else if (strcasecmp(val, "info") == 0) change_log_level(LOG_INFO);
+        else if (strcasecmp(val, "warn") == 0) change_log_level(LOG_WARN);
+        else if (strcasecmp(val, "error") == 0) change_log_level(LOG_ERROR);
+    }
 }
 
 void parse_config_file(FILE *config_file,struct proxy_config *config)

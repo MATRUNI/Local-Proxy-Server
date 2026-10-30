@@ -11,7 +11,7 @@ typedef enum {
 
 void change_log_level(int new_level);
 
-int init_logger();
+int init_logger(char *log_file_dir, int log_file_count, size_t log_file_size);
 
 int write_log(log_level_t level,const char *line, ...);
 
