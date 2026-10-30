@@ -16,12 +16,13 @@
 #include "logger.h"
 #include "tls.h"
 #include "config.h"
+#include "poll_engine.h"
 
 static volatile sig_atomic_t server_running = 1;
 static pthread_attr_t attr;
 struct worker_context {
     int id;
-    int epoll_fd;
+    struct poll_engine *engine;
     int listen_fd;
     pthread_t thread;
 };
@@ -37,21 +38,22 @@ static void handle_sigint(int sig)
 static void *proxy_thread_worker(void *arg)
 {
     struct worker_context *self = (struct worker_context *)arg;
-    struct epoll_event events[MAX_EVENTS];
+    struct socket_info events[MAX_EVENTS];
     while (server_running)
     {
-        int n =epoll_wait(self->epoll_fd,events,MAX_EVENTS,500);
+        int n = self->engine->wait(self->engine,events,500);
         if(n==-1)
         {
             continue;
         }
         for(int i=0;i<n;i++)
         {
-            if(events[i].data.ptr==NULL)
+            if(events[i].user_data==NULL)
             {
                 while (1)
                 {
                     int client_fd = accept(self->listen_fd,NULL,NULL);
+                    
                     if (client_fd == -1)
                     {
                         break;
@@ -63,23 +65,19 @@ static void *proxy_thread_worker(void *arg)
                         close(client_fd);
                         continue;
                     }
-                    struct client_session *ses = session_create(client_fd,self->epoll_fd);
+                    struct client_session *ses = session_create(client_fd,self->engine);
                     if(ses==NULL)
                     {
                         close(client_fd);
                         continue;
                     }
-                    struct epoll_event ev = {
-                        .data.ptr = ses,
-                        .events = EPOLLIN | EPOLLET | EPOLLONESHOT
-                    };
-                    epoll_ctl(self->epoll_fd,EPOLL_CTL_ADD,client_fd,&ev);
+                    self->engine->add(self->engine,client_fd,ENGINE_READ | ENGINE_ONESHOT,ses);
                 }
             }
             else
             {
-                struct client_session *session = events[i].data.ptr;
-                set_socket_timeout(session->con.client_fd);
+                struct client_session *session = events[i].user_data;
+                // set_socket_timeout(session->con.client_fd);
                 if(proxy_handle_client(session)!=PROXY_AGAIN)
                 {
                     session_free(session);
@@ -88,7 +86,7 @@ static void *proxy_thread_worker(void *arg)
         }
     }
     close(self->listen_fd);
-    close(self->epoll_fd);
+    self->engine->destroy(self->engine);
     return NULL;    
 }
 
@@ -114,7 +112,12 @@ static int spawn_worker_fleet(struct worker_context *workers, int threads,int po
     for(int i=0;i<threads;i++)
     {
         workers[i].id = i;
-        workers[i].epoll_fd = epoll_create1(0);
+        workers[i].engine = poll_engine_create();
+        if (workers[i].engine == NULL) 
+        {
+            write_log(LOG_ERROR, "Failed to create poll engine for worker %d", i);
+            return 1;
+        }
         struct proxy_server srv = {0};
         if(server_init(&srv, port, ip,timeout) != 0)
         {
@@ -123,11 +126,7 @@ static int spawn_worker_fleet(struct worker_context *workers, int threads,int po
         }
         set_socket_non_blocking(srv.listen_fd);
         workers[i].listen_fd = srv.listen_fd;
-        struct epoll_event ev = {
-            .data.ptr = NULL,
-            .events = EPOLLIN | EPOLLET
-        };
-        epoll_ctl(workers[i].epoll_fd,EPOLL_CTL_ADD,workers[i].listen_fd,&ev);
+        workers[i].engine->add(workers[i].engine,workers[i].listen_fd,ENGINE_READ,NULL);
         if (pthread_create(&workers[i].thread, &attr, proxy_thread_worker, &workers[i]) != 0)
         {
             write_log(LOG_ERROR, "Out of threads.");

@@ -21,14 +21,14 @@
 
 #define MAX_HEADER_SIZE (65536)
 
-struct client_session *session_create(int client_fd,int epoll_fd)
+struct client_session *session_create(int client_fd,struct poll_engine *engine)
 {
     struct client_session *session = malloc(sizeof(struct client_session));
     if (session == NULL) return NULL;
     memset(&session->con, 0, sizeof(session->con));
     session->con.client_fd = client_fd;
+    session->engine = engine;
     session->con.upstream_fd = -1;
-    session->epoll_fd = epoll_fd;
     session->level = LEVEL_CLIENT_READ_HEADERS;
     session->capacity = 4096;
     session->total = 0;
@@ -69,12 +69,7 @@ static void session_reset(struct client_session *session)
 
     set_socket_non_blocking(client_fd);
     set_socket_timeout(client_fd);
-
-    struct epoll_event ev = {
-        .data.ptr = session,
-        .events = EPOLLIN | EPOLLET | EPOLLONESHOT
-    };
-    epoll_ctl(session->epoll_fd, EPOLL_CTL_MOD, client_fd, &ev);
+    session->engine->mod(session->engine,client_fd,ENGINE_READ | ENGINE_ONESHOT,session);
 }
 
 void session_free(struct client_session *session)
@@ -255,11 +250,7 @@ int proxy_handle_client(struct client_session *session)
     session->con.upstream_fd = server_fd;
     session->con.upstream_ssl = NULL;
 
-    struct epoll_event ev = {
-        .data.ptr = session,
-        .events = EPOLLOUT | EPOLLET | EPOLLONESHOT
-    };
-    epoll_ctl(session->epoll_fd, EPOLL_CTL_ADD, server_fd, &ev);
+    session->engine->add(session->engine, server_fd, ENGINE_WRITE | ENGINE_ONESHOT,session);
     session->level = LEVEL_UPSTREAM_CONNECT;
     if(in_progress)
     {
@@ -274,7 +265,8 @@ int proxy_handle_client(struct client_session *session)
         send_client_error(client_fd, 502, "TLS/SSL handshake with target server failed\n");
         goto cleanup_con;
     }
-    epoll_ctl(session->epoll_fd, EPOLL_CTL_DEL, session->con.upstream_fd, NULL);
+    // epoll_ctl(session->epoll_fd, EPOLL_CTL_DEL, session->con.upstream_fd, NULL);
+    session->engine->del(session->engine,session->engine->fd);
     set_socket_blocking(session->con.upstream_fd);
     set_socket_timeout(session->con.upstream_fd);
     bool is_https = (strcasecmp(session->url.schema,"https")==0);

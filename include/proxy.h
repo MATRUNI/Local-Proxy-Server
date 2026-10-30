@@ -3,6 +3,7 @@
 #include "config.h"
 #include "http.h"
 #include "url.h"
+#include "poll_engine.h"
 
 #define PROXY_DONE   0   // Request completed successfully
 #define PROXY_ERROR  1   // Error occurred or client disconnected
@@ -33,7 +34,7 @@ typedef enum {
 
 struct client_session {
     struct proxy_connection con;
-    int epoll_fd;
+    struct poll_engine *engine;
     struct http_url url;
     session_level_t level;
     struct http_request req;
@@ -47,7 +48,7 @@ struct client_session {
 };
 
 
-struct client_session *session_create(int client_fd, int epoll_fd);
+struct client_session *session_create(int client_fd, struct poll_engine *engine);
 
 void session_free(struct client_session *session);
 
