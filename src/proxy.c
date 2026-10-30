@@ -8,7 +8,6 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <time.h>
-#include <sys/epoll.h>
 
 #include "url.h"
 #include "http.h"

@@ -1,11 +1,10 @@
+#if defined(__linux__)
 #include <sys/epoll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
 #include "poll_engine.h"
-
-#define ENGINE_MAX_EVENTS 64
 
 static inline uint32_t translate_to_epoll(int flags)
 {
@@ -101,3 +100,4 @@ struct poll_engine *poll_engine_create(void)
     p->destroy = epoll_engine_destroy;
     return p;
 }
+#endif

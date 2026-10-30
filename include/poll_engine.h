@@ -1,6 +1,7 @@
 #ifndef POLL_ENGINE_H
 #define POLL_ENGINE_H
-#include "logger.h"
+
+#define ENGINE_MAX_EVENTS 64
 
 enum POLL_EVENTS {
     ENGINE_READ = 1<<0,

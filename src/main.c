@@ -9,7 +9,6 @@
 #include <signal.h>
 #include <pthread.h>
 #include <fcntl.h>
-#include <sys/epoll.h>
 
 #include "server.h"
 #include "proxy.h"
