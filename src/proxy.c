@@ -1,8 +1,5 @@
-#include <sys/socket.h>
-#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <netdb.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdbool.h>
@@ -17,6 +14,7 @@
 #include "http_error.h"
 #include "server.h"
 #include "upstream.h"
+#include "net_compat.h"
 
 #define MAX_HEADER_SIZE (65536)
 
@@ -84,7 +82,7 @@ void session_free(struct client_session *session)
     conn_close(&session->con);
     if (session->con.client_fd >= 0)
     {
-        close(session->con.client_fd);
+        close_socket(session->con.client_fd);
         session->con.client_fd = -1;
     }
     free(session);
@@ -158,7 +156,7 @@ int proxy_handle_client(struct client_session *session)
         int n = recv(client_fd,buffer+total,capacity-total-1,0);
         if (n == -1)
         {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (socket_errno == EAGAIN_COMPAT || socket_errno == EWOULDBLOCK_COMPAT) {
                 write_log(LOG_WARN, "Waiting for more data from client.");
                 session->total = total;
                 session->capacity = capacity;
@@ -301,8 +299,7 @@ int proxy_handle_client(struct client_session *session)
             }
         }
     }
-    struct timespec start_ts, end_ts;
-    clock_gettime(CLOCK_MONOTONIC, &start_ts);
+    uint64_t start_ms = get_time_ms();
 
     if(receiveHTTPResponse(&session->con)==1)
     {
@@ -310,9 +307,8 @@ int proxy_handle_client(struct client_session *session)
         goto cleanup_con;
     }
 
-    clock_gettime(CLOCK_MONOTONIC, &end_ts);
-    long latency_ms = (end_ts.tv_sec - start_ts.tv_sec) * 1000 + (end_ts.tv_nsec - start_ts.tv_nsec) / 1000000;
-    write_log(LOG_INFO, "%s %s -> %d (%zu bytes) in %ld ms",session->req.method, session->url.host, session->con.status_code, session->con.body_bytes_sent ,latency_ms);
+    uint64_t latency_ms = get_time_ms() - start_ms;
+    write_log(LOG_INFO, "%s %s -> %d (%lu bytes) in %llu ms",session->req.method, session->url.host, session->con.status_code, (unsigned long)session->con.body_bytes_sent ,(unsigned long long)latency_ms);
 
     const char *client_conn = get_header_value(&session->req.headers, "Connection");
     bool keep_alive = true;

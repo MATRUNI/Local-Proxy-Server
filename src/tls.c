@@ -1,11 +1,10 @@
+#if !defined(_WIN32)
 #include <openssl/ssl.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#include <errno.h>
 
 #include "proxy.h"
 #include "tls.h"
 #include "logger.h"
+#include "net_compat.h"
 
 static SSL_CTX *global_ssl_ctx = NULL;
 
@@ -83,9 +82,10 @@ int conn_write_all(struct proxy_connection *conn, const void *buf, size_t total)
         ssize_t n = conn->write(conn, (char *)buf + sent, total - sent);
         if (n == -1)
         {
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            int err = socket_errno;
+            if (err == EAGAIN_COMPAT || err == EWOULDBLOCK_COMPAT)
                 write_log(LOG_WARN, "Upstream server write timed out after 10s.");
-            else if (errno == EPIPE || errno == ECONNRESET)
+            else if (err == EPIPE || err == ECONNRESET)
                 write_log(LOG_WARN, "Upstream server closed connection unexpectedly.");
             else
                 perror("send");
@@ -107,7 +107,8 @@ void conn_close(struct proxy_connection *conn)
     }
     if(conn->upstream_fd>=0)
     {
-        close(conn->upstream_fd);
+        close_socket(conn->upstream_fd);
         conn->upstream_fd=-1;
     }
 }
+#endif

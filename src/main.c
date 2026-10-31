@@ -1,14 +1,8 @@
 #define _GNU_SOURCE
 #include <stdio.h>
-#include <sys/socket.h>
-#include <sys/syscall.h>
 #include <string.h>
-#include <unistd.h>
-#include <arpa/inet.h>
 #include <stdlib.h>
 #include <signal.h>
-#include <pthread.h>
-#include <fcntl.h>
 
 #include "server.h"
 #include "proxy.h"
@@ -16,6 +10,8 @@
 #include "tls.h"
 #include "config.h"
 #include "poll_engine.h"
+#include "net_compat.h"
+#include "thread_compat.h"
 
 static volatile sig_atomic_t server_running = 1;
 static pthread_attr_t attr;
@@ -32,6 +28,15 @@ static void handle_sigint(int sig)
 {
     (void)sig;
     server_running = 0;
+}
+
+static inline void put_to_sleep(void)
+{
+    #if defined(_WIN32)
+        Sleep(1000);
+    #else
+        sleep(1);
+    #endif
 }
 
 static void *proxy_thread_worker(void *arg)
@@ -61,13 +66,13 @@ static void *proxy_thread_worker(void *arg)
                     set_socket_nodelay(client_fd);
                     if(res==-1)
                     {
-                        close(client_fd);
+                        close_socket(client_fd);
                         continue;
                     }
                     struct client_session *ses = session_create(client_fd,self->engine);
                     if(ses==NULL)
                     {
-                        close(client_fd);
+                        close_socket(client_fd);
                         continue;
                     }
                     self->engine->add(self->engine,client_fd,ENGINE_READ | ENGINE_ONESHOT,ses);
@@ -84,7 +89,7 @@ static void *proxy_thread_worker(void *arg)
             }
         }
     }
-    close(self->listen_fd);
+    close_socket(self->listen_fd);
     self->engine->destroy(self->engine);
     return NULL;    
 }
@@ -143,21 +148,25 @@ static int run_server(const struct proxy_config *config)
     }
 
     write_log(LOG_INFO, "Server is listening to %s:%d", config->listen_ip, config->port);
-
-    struct sigaction sa = {0};
-    sa.sa_handler = handle_sigint;
-    sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
+    #if defined(_WIN32)
+        signal(SIGINT, handle_sigint);
+        signal(SIGTERM, handle_sigint);
+    #else
+        struct sigaction sa = {0};
+        sa.sa_handler = handle_sigint;
+        sigaction(SIGINT, &sa, NULL);
+        sigaction(SIGTERM, &sa, NULL);
+    #endif
     get_worker_thread_attr();
     struct worker_context *workers = malloc(sizeof(struct worker_context) * config->threads);
     if(spawn_worker_fleet(workers,(int)config->threads,config->port,config->listen_ip,config->timeout)==1)
     {
-        return 1;
+        put_to_sleep();
     }
 
     while (server_running)
     {
-        sleep(1);
+        put_to_sleep();
     }
     destroy_worker_thread_attr();
     write_log(LOG_INFO, "Shutting down proxy server gracefully...");
@@ -172,7 +181,17 @@ static int run_server(const struct proxy_config *config)
 int main(int argc, char *argv[])
 {
     setbuf(stdout, NULL);
-    signal(SIGPIPE, SIG_IGN);
+    #ifdef SIGPIPE
+        signal(SIGPIPE, SIG_IGN);
+    #endif
+
+    #if defined(_WIN32)
+        WSADATA wsa;
+        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+            fprintf(stderr, "WSAStartup failed\n");
+            return 1;
+        }
+    #endif
 
     if (tls_init() != 0)
     {
@@ -180,7 +199,14 @@ int main(int argc, char *argv[])
         close_logger();
         return 1;
     }
-    long default_threads = sysconf(_SC_NPROCESSORS_ONLN);
+    #if defined(_WIN32)
+        SYSTEM_INFO sysinfo;
+        GetSystemInfo(&sysinfo);
+        long default_threads = sysinfo.dwNumberOfProcessors;
+    #else
+        long default_threads = sysconf(_SC_NPROCESSORS_ONLN);
+    #endif
+
     default_threads = (default_threads<0) ? 4 : default_threads;
     struct proxy_config config = {
         .port = 17777,
@@ -235,5 +261,8 @@ int main(int argc, char *argv[])
 
     close_logger();
     tls_cleanup();
+    #if defined(_WIN32)
+        WSACleanup();
+    #endif
     return status;
 }

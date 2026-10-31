@@ -2,6 +2,10 @@
 #ifndef TLS_H
 #define TLS_H
 
+#include <stdbool.h>
+#include <stddef.h>
+
+struct proxy_connection;
 int tls_init(void);
 
 void tls_cleanup(void);

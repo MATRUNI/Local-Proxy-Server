@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <pthread.h>
 #include <time.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -41,6 +40,7 @@ static uint64_t get_thread_id(void)
 
 #include "logger.h"
 #include "config.h"
+#include "thread_compat.h"
 
 static FILE * logger = NULL;
 
@@ -360,12 +360,16 @@ int write_log(log_level_t level,const char *line,...)
     struct timespec ts;
     struct tm tm;
     char timestamp[32];
-    if (clock_gettime(CLOCK_REALTIME, &ts) == -1)
-        return return_value;
+    timespec_get(&ts, TIME_UTC);
 
-    if (localtime_r(&ts.tv_sec, &tm) == NULL)
-        return return_value;
-
+    #if defined(_WIN32)
+        time_t sec = (time_t)ts.tv_sec;
+        localtime_s(&tm, &sec);
+    #else
+        if (localtime_r(&ts.tv_sec, &tm) == NULL)
+            return return_value;
+    #endif
+    
     if (strftime(timestamp, sizeof(timestamp),"%Y-%m-%d %H:%M:%S", &tm) == 0)
         return return_value;
 
@@ -375,7 +379,7 @@ int write_log(log_level_t level,const char *line,...)
     char msg[1024];
     int len = 0;
     
-    len = snprintf(msg,sizeof(msg),"[%s.%03ld] [TID:%lu] [%s] ",timestamp,ts.tv_nsec/1000000,tid,log_value[level]);
+    len = snprintf(msg,sizeof(msg),"[%s.%03ld] [TID:%llu] [%s] ",timestamp,ts.tv_nsec/1000000,(unsigned long long)tid,log_value[level]);
     
     if(len<0)
     {

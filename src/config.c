@@ -1,9 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <strings.h>
-#include <unistd.h>
 #include <stdbool.h>
-#include <arpa/inet.h>
 #include <string.h>
 #include <stdint.h>
 #include <dirent.h>
@@ -12,6 +10,19 @@
 #include "logger.h"
 #include "config.h"
 #include "url.h"
+#include "net_compat.h"
+
+static long get_online_cores(void)
+{
+    #if defined(_WIN32)
+        SYSTEM_INFO sysinfo;
+        GetSystemInfo(&sysinfo);
+        long online_core = sysinfo.dwNumberOfProcessors;
+    #else
+        long online_core = sysconf(_SC_NPROCESSORS_ONLN);
+    #endif
+    return online_core;
+}
 
 int parse_config(int argc, char **argv, struct proxy_config *config)
 {
@@ -98,7 +109,7 @@ int parse_config(int argc, char **argv, struct proxy_config *config)
         }
         else if (strcasecmp(argv[i], "-t") == 0 || strcasecmp(argv[i], "--threads") == 0)
         {
-            long online_core = sysconf(_SC_NPROCESSORS_ONLN);
+            long online_core = get_online_cores();
             if(online_core == -1)
             {
                 write_log(LOG_ERROR,"OS fail to detect Number of Processors currently Online.");
@@ -236,7 +247,7 @@ void make_changes(char *key, char *val, struct proxy_config *config)
     {
         if(isNumber(val)==0)
         {
-            long online_core = sysconf(_SC_NPROCESSORS_ONLN);
+            long online_core = get_online_cores();
             if(online_core == -1)
             {
                 write_log(LOG_ERROR,"OS fail to detect Number of Processors currently Online.");

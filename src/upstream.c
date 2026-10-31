@@ -1,17 +1,13 @@
-#include <sys/socket.h>
-#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <netdb.h>
 #include <string.h>
-#include <errno.h>
 #include <stdbool.h>
-#include <arpa/inet.h>
 
 #include "upstream.h"
 #include "logger.h"
 #include "tls.h"
 #include "server.h"
+#include "net_compat.h"
 
 #define MAX_HEADER_SIZE (65536)
 
@@ -31,12 +27,12 @@ static int connectToDNS(struct addrinfo *adr,bool *in_progress)
             *in_progress = false;
             return server_fd;
         }
-        if (res==-1 && errno == EINPROGRESS)
+        if (res==-1 && socket_errno == EINPROGRESS_COMPAT)
         {
             *in_progress = true;
             return server_fd;
         }
-        close(server_fd);
+        close_socket(server_fd);
     }
     return -1;
 }
@@ -59,12 +55,12 @@ int make_api_call(const char *host, const char *port, bool *in_progress)
                 *in_progress = false;
                 return server_fd;
             }
-            if (res == -1 && errno == EINPROGRESS)
+            if (res == -1 && socket_errno == EINPROGRESS_COMPAT)
             {
                 *in_progress = true;
                 return server_fd;
             }
-            close(server_fd);
+            close_socket(server_fd);
         }
     }
     struct addrinfo hints={0};
@@ -172,7 +168,7 @@ int stream_body(struct proxy_connection *con,bool to_client,char *buffer,size_t 
         if(n<=0)
         {
             if(n==0) break;
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (socket_errno == EAGAIN_COMPAT || socket_errno == EWOULDBLOCK_COMPAT) {
                 write_log(LOG_WARN, "%s read timed out after 10s.", to_client ? "Upstream" : "Client");
             } else {
                 perror("recv");
@@ -262,7 +258,7 @@ int receiveHTTPResponse(struct proxy_connection *con)
         int n = con->read(con,buffer+total, capacity-total-1);
         if (n == -1)
         {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (socket_errno == EAGAIN_COMPAT || socket_errno == EWOULDBLOCK_COMPAT) {
                 write_log(LOG_WARN, "Upstream server response timed out after 10s.");
             }
             goto cleanup_buffer;

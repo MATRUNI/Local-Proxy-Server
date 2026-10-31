@@ -38,11 +38,11 @@ int format_error_response(char *buf, size_t max_len, int status_code, const char
         "Access-Control-Allow-Origin: *\r\n"
         "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n"
         "Access-Control-Allow-Headers: *\r\n"
-        "Content-Length: %zu\r\n"
+        "Content-Length: %lu\r\n"
         "Connection: close\r\n"
         "\r\n"
         "%s",
-        status_code, status_text, body_len, body
+        status_code, status_text, ( unsigned long)body_len, body
     );
 
     if (written < 0 || (size_t)written >= max_len)
