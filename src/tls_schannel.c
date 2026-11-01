@@ -30,7 +30,10 @@ int tls_init(void)
     SCHANNEL_CRED cred_data = {0};
     cred_data.dwVersion = SCHANNEL_CRED_VERSION;
     cred_data.grbitEnabledProtocols = SP_PROT_TLS1_2_CLIENT | SP_PROT_TLS1_3_CLIENT;
-    cred_data.dwFlags = SCH_CRED_AUTO_CRED_VALIDATION | SCH_CRED_USE_DEFAULT_CREDS;
+    cred_data.dwFlags = SCH_CRED_AUTO_CRED_VALIDATION | 
+                    SCH_CRED_USE_DEFAULT_CREDS |
+                    SCH_CRED_IGNORE_NO_REVOCATION_CHECK | 
+                    SCH_CRED_IGNORE_REVOCATION_OFFLINE;
 
     TimeStamp expiry;
     SECURITY_STATUS status = AcquireCredentialsHandleA(
@@ -106,8 +109,8 @@ static ssize_t schannel_write_wrapper(struct proxy_connection *conn, void *buf, 
         free(packet);
         return -1;
     }
-
-    int sent = send(conn->upstream_fd, packet, total_len, 0);
+    size_t actual_len = buffers[0].cbBuffer + buffers[1].cbBuffer + buffers[2].cbBuffer;
+    int sent = send(conn->upstream_fd, packet, actual_len, 0);
     free(packet);
 
     if (sent <= 0) return -1;
@@ -178,8 +181,6 @@ static ssize_t schannel_read_wrapper(struct proxy_connection *conn, void *buf, s
                 extra_buf = &in_buffers[i];
         }
 
-        if (data_buf == NULL) return -1;
-
         // Shift leftover encrypted ciphertext to start of raw_buf
         if (extra_buf != NULL && extra_buf->cbBuffer > 0) {
             memmove(sess->raw_buf, extra_buf->pvBuffer, extra_buf->cbBuffer);
@@ -187,6 +188,8 @@ static ssize_t schannel_read_wrapper(struct proxy_connection *conn, void *buf, s
         } else {
             sess->raw_len = 0;
         }
+        
+        if (data_buf == NULL || data_buf->cbBuffer == 0) continue;
 
         // Copy decrypted plaintext
         size_t copy = (len < data_buf->cbBuffer) ? len : data_buf->cbBuffer;
@@ -245,7 +248,7 @@ int tls_connect(struct proxy_connection *conn, const char *hostname, bool is_htt
         send(conn->upstream_fd, out_buf.pvBuffer, out_buf.cbBuffer, 0);
         FreeContextBuffer(out_buf.pvBuffer);
     }
-    char in_buf[16384];
+    char in_buf[32768];
     int in_len = 0;
 
     while (status == SEC_I_CONTINUE_NEEDED || status == SEC_E_INCOMPLETE_MESSAGE)
@@ -283,7 +286,7 @@ int tls_connect(struct proxy_connection *conn, const char *hostname, bool is_htt
             0, 0,
             &in_desc,             
             0,
-            NULL,
+            &sess->context,
             &out_desc,            
             &attrs,
             &expiry
