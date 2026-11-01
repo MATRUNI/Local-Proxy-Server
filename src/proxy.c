@@ -72,6 +72,17 @@ static void session_reset(struct client_session *session)
 void session_free(struct client_session *session)
 {
     if (session == NULL) return;
+    if (session->engine != NULL)
+    {
+        if (session->con.client_fd >= 0)
+        {
+            session->engine->del(session->engine, session->con.client_fd);
+        }
+        if (session->con.upstream_fd >= 0)
+        {
+            session->engine->del(session->engine, session->con.upstream_fd);
+        }
+    }
     if (session->buffer != NULL)
     {
         free(session->buffer);
@@ -263,7 +274,7 @@ int proxy_handle_client(struct client_session *session)
         goto cleanup_con;
     }
     // epoll_ctl(session->epoll_fd, EPOLL_CTL_DEL, session->con.upstream_fd, NULL);
-    session->engine->del(session->engine,session->engine->fd);
+    session->engine->del(session->engine,session->con.upstream_fd);
     set_socket_blocking(session->con.upstream_fd);
     set_socket_timeout(session->con.upstream_fd);
     bool is_https = (strcasecmp(session->url.schema,"https")==0);

@@ -8,6 +8,10 @@ Write-Host "   BUILDING & TESTING C PROXY ON WINDOWS (WSAPOLL + SCHANNEL)   " -F
 Write-Host "================================================================" -ForegroundColor Cyan
 
 # 1. Ensure build directory exists
+$msysUcrt = "$env:USERPROFILE\msys64\ucrt64\bin"
+if (Test-Path $msysUcrt) {
+    $env:PATH = "$msysUcrt;$env:PATH"
+}
 if (-not (Test-Path "build")) {
     New-Item -ItemType Directory -Path "build" | Out-Null
 }

@@ -182,14 +182,16 @@ static ssize_t schannel_read_wrapper(struct proxy_connection *conn, void *buf, s
         }
 
         // Shift leftover encrypted ciphertext to start of raw_buf
-        if (extra_buf != NULL && extra_buf->cbBuffer > 0) {
-            memmove(sess->raw_buf, extra_buf->pvBuffer, extra_buf->cbBuffer);
-            sess->raw_len = extra_buf->cbBuffer;
-        } else {
-            sess->raw_len = 0;
+        if (data_buf == NULL || data_buf->cbBuffer == 0) 
+        {
+            if (extra_buf != NULL && extra_buf->cbBuffer > 0) {
+                memmove(sess->raw_buf, extra_buf->pvBuffer, extra_buf->cbBuffer);
+                sess->raw_len = extra_buf->cbBuffer;
+            } else {
+                sess->raw_len = 0;
+            }
+            continue;
         }
-        
-        if (data_buf == NULL || data_buf->cbBuffer == 0) continue;
 
         // Copy decrypted plaintext
         size_t copy = (len < data_buf->cbBuffer) ? len : data_buf->cbBuffer;
@@ -199,11 +201,15 @@ static ssize_t schannel_read_wrapper(struct proxy_connection *conn, void *buf, s
             sess->plain_len = data_buf->cbBuffer - copy;
             memcpy(sess->plain_buf, (char *)data_buf->pvBuffer + copy, sess->plain_len);
         }
-
+        if (extra_buf != NULL && extra_buf->cbBuffer > 0) {
+            memmove(sess->raw_buf, extra_buf->pvBuffer, extra_buf->cbBuffer);
+            sess->raw_len = extra_buf->cbBuffer;
+        } else {
+            sess->raw_len = 0;
+        }
         return copy;
     }
 }
-
 
 int tls_connect(struct proxy_connection *conn, const char *hostname, bool is_https)
 {

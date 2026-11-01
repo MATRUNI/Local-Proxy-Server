@@ -4,27 +4,29 @@
 #include <stdlib.h>
 #include "poll_engine.h"
 
-#define WSAPOLL_MAX_EVENTS 128
+#define WSAPOLL_MAX_EVENTS 1024
 
 struct win_poll_engine {
     struct poll_engine base;
-    WSAPOLLFD fds[ENGINE_MAX_EVENTS];
-    void *user_data[ENGINE_MAX_EVENTS];
+    WSAPOLLFD fds[WSAPOLL_MAX_EVENTS];
+    void *user_data[WSAPOLL_MAX_EVENTS];
+    int oneshot[WSAPOLL_MAX_EVENTS];
     int count;
 };
 
 static int wsapoll_engine_add(struct poll_engine *engine, int target, int flags, void *user_data)
 {
     struct win_poll_engine *win = (struct win_poll_engine *)engine;
-    if (win->count >= ENGINE_MAX_EVENTS) return -1;
+    if (win->count >= WSAPOLL_MAX_EVENTS) return -1;
 
     int idx = win->count++;
-    win->fds[idx].fd = target;
+    win->fds[idx].fd = (socket_t)target;
     win->fds[idx].events = 0;
     if (flags & ENGINE_READ)  win->fds[idx].events |= POLLRDNORM;
     if (flags & ENGINE_WRITE) win->fds[idx].events |= POLLWRNORM;
     win->fds[idx].revents = 0;
     win->user_data[idx] = user_data;
+    win->oneshot[idx] = (flags & ENGINE_ONESHOT) ? 1 : 0;
     return 0;
 }
 
@@ -39,6 +41,7 @@ static int wsapoll_engine_wait(struct poll_engine *engine, struct socket_info *e
     int fired = 0;
     for (int i = 0; i < win->count && fired < ENGINE_MAX_EVENTS; i++) {
         if (win->fds[i].revents != 0) {
+            if(win->fds[i].revents & POLLNVAL) continue;
             events[fired].user_data = win->user_data[i];
             events[fired].events = 0;
             if (win->fds[i].revents & (POLLRDNORM | POLLIN))
@@ -47,6 +50,9 @@ static int wsapoll_engine_wait(struct poll_engine *engine, struct socket_info *e
                 events[fired].events |= ENGINE_WRITE;
             if (win->fds[i].revents & (POLLERR | POLLHUP))
                 events[fired].events |= ENGINE_ERROR;
+            if(win->oneshot[i]) {
+                win->fds[i].events = 0;
+            }
             fired++;
         }
     }
@@ -66,6 +72,7 @@ static int wsapoll_engine_mod(struct poll_engine *engine, int target, int flags,
             win->fds[i].events = events;
             win->fds[i].revents = 0;
             win->user_data[i] = user_data;
+            win->oneshot[i] = (flags & ENGINE_ONESHOT) ? 1 : 0;
             return 0;
         }
     }
@@ -79,6 +86,7 @@ static int wsapoll_engine_del(struct poll_engine *engine, int target)
         if (win->fds[i].fd == (SOCKET)target) {
             win->fds[i] = win->fds[win->count - 1];
             win->user_data[i] = win->user_data[win->count - 1];
+            win->oneshot[i] = win->oneshot[win->count - 1];
             win->count--;
             return 0;
         }
