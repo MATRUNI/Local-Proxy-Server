@@ -3,10 +3,10 @@
 
 struct http_url
 {
-    char *schema;
-    char *host;
-    char *port;
-    char *path;
+    char schema[8];
+    char host[128];
+    char port[8];
+    char path[1024];
 };
 
 int parse_url(char *input, struct http_url *url);

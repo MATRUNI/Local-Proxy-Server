@@ -59,8 +59,9 @@ static int parse_headers(char *buffer,struct http_headers *headers)
     if(buffer==NULL || headers==NULL) return 1;
     if (headers->capacity == 0)
         headers->capacity = 8;
-    headers->items=malloc(headers->capacity*sizeof(struct http_header));
-    if(headers->items==NULL) return 1;
+    headers->items = headers->inline_items;
+    headers->capacity = HTTP_MAX_INLINE_HEADERS;
+    headers->count = 0;
     char *rest=strstr(buffer,"\r\n");
     while(rest!=NULL)
     {
@@ -68,11 +69,19 @@ static int parse_headers(char *buffer,struct http_headers *headers)
         *rest='\0';
         if(headers->count==headers->capacity)
         {
-            size_t new_capacity = headers->capacity*2;
-            struct http_header *new_item = realloc(headers->items,new_capacity*sizeof(struct http_header));
-            if(new_item==NULL) return 1;
-            headers->items=new_item;
-            headers->capacity=new_capacity;
+            size_t new_capacity = headers->capacity * 2;
+            struct http_header *new_item;
+            if (headers->items == headers->inline_items) {
+                new_item = malloc(new_capacity * sizeof(struct http_header));
+                if (new_item != NULL) {
+                    memcpy(new_item, headers->inline_items, headers->count * sizeof(struct http_header));
+                }
+            } else {
+                new_item = realloc(headers->items, new_capacity * sizeof(struct http_header));
+            }
+            if (new_item == NULL) return 1;
+            headers->items = new_item;
+            headers->capacity = new_capacity;
         }
         if(add_header(buffer,&headers->items[headers->count])==1)
         {
@@ -87,10 +96,14 @@ static int parse_headers(char *buffer,struct http_headers *headers)
 
 void free_headers(struct http_headers *headers)
 {
-    free(headers->items);
-    headers->items=NULL;
-    headers->capacity=0;
-    headers->count=0;
+    if (headers == NULL) return;
+    if (headers->items != NULL && headers->items != headers->inline_items)
+    {
+        free(headers->items);
+    }
+    headers->items = NULL;
+    headers->capacity = 0;
+    headers->count = 0;
 }
 
 void free_request(struct http_request *req)

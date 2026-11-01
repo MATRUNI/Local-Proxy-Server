@@ -21,6 +21,7 @@ static int connectToDNS(struct addrinfo *adr,bool *in_progress)
             continue;
         }
         set_socket_non_blocking(server_fd);
+        set_socket_nodelay(server_fd);
         int res = connect(server_fd,p->ai_addr,p->ai_addrlen);
         if(res==0)
         {
@@ -49,6 +50,7 @@ int make_api_call(const char *host, const char *port, bool *in_progress)
         if (server_fd != -1)
         {
             set_socket_non_blocking(server_fd);
+            set_socket_nodelay(server_fd);
             int res = connect(server_fd, (struct sockaddr *)&sin, sizeof(sin));
             if (res == 0)
             {
@@ -184,7 +186,7 @@ int stream_body(struct proxy_connection *con,bool to_client,char *buffer,size_t 
 
 int sendHTTPRequest(struct proxy_connection *con, struct http_request *req ,struct http_url *url)
 {
-    char request[MAX_HEADER_SIZE];
+    char request[8192];
     size_t offset = 0;
     int temp;
 
@@ -231,10 +233,10 @@ int sendHTTPRequest(struct proxy_connection *con, struct http_request *req ,stru
 int receiveHTTPResponse(struct proxy_connection *con)
 {
     int return_code = 1;
-    char *buffer = malloc(4096);
-    if(buffer==NULL) return return_code;
+    char stack_buf[4096];
+    char *buffer = stack_buf;
     size_t total=0;
-    size_t capacity=4096;
+    size_t capacity=sizeof(stack_buf);
 
     char *headers_end = NULL;
 
@@ -248,7 +250,15 @@ int receiveHTTPResponse(struct proxy_connection *con)
                 write_log(LOG_WARN, "Header too large.");
                 goto cleanup_buffer;
             }
-            char * new_buf = realloc(buffer,capacity);
+            char *new_buf;
+            if (buffer == stack_buf) {
+                new_buf = malloc(capacity);
+                if (new_buf != NULL) {
+                    memcpy(new_buf, stack_buf, total + 1);
+                }
+            } else {
+                new_buf = realloc(buffer, capacity);
+            }
             if(new_buf==NULL)
             {
                 goto cleanup_buffer;
@@ -281,7 +291,8 @@ int receiveHTTPResponse(struct proxy_connection *con)
     }
 
     size_t header_out_cap = total + 1024;
-    char *header_out_buf = malloc(header_out_cap);
+    char stack_out[4096];
+    char *header_out_buf = (header_out_cap <= sizeof(stack_out)) ? stack_out : malloc(header_out_cap);
     if (header_out_buf == NULL)
     {
         free_response(&res);
@@ -293,12 +304,13 @@ int receiveHTTPResponse(struct proxy_connection *con)
 
     if (send_headers(con->client_fd, header_out_buf, header_out_cap, &res.headers, headers_len, 0) == 1)
     {
-        free(header_out_buf);
+        if(header_out_buf!=stack_out)
+            free(header_out_buf);
         free_response(&res);
         goto cleanup_buffer;
     }
-
-    free(header_out_buf);
+    if(header_out_buf!=stack_out)
+        free(header_out_buf);
     const char *len_str = get_header_value(&res.headers, "Content-Length");
     con->status_code = res.statusCode;
     if (len_str != NULL)
@@ -345,6 +357,7 @@ int receiveHTTPResponse(struct proxy_connection *con)
     }
     return_code = 0;
     cleanup_buffer:
-    free(buffer);
+    if(buffer != stack_buf)
+        free(buffer);
     return return_code;
 }

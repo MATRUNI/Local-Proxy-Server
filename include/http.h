@@ -1,6 +1,7 @@
 #ifndef HTTP_H
 #define HTTP_H
 #include <stddef.h>
+#define HTTP_MAX_INLINE_HEADERS 32
 struct http_header
 {
     char *name;
@@ -12,6 +13,7 @@ struct http_headers
     struct http_header *items;
     size_t count;
     size_t capacity;
+    struct http_header inline_items[HTTP_MAX_INLINE_HEADERS];
 };
 
 struct http_request

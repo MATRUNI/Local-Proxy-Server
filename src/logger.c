@@ -25,17 +25,22 @@
 
 static uint64_t get_thread_id(void)
 {
-    #if defined(__linux__)
-        return (uint64_t)syscall(SYS_gettid);
-    #elif defined(__APPLE__)
-        uint64_t tid;
-        pthread_threadid_np(NULL, &tid);
-        return tid;
-    #elif defined(_WIN32)
-        return (uint64_t)GetCurrentThreadId();
+    #if defined(_WIN32)
+        static __declspec(thread) uint64_t cached_tid = 0;
     #else
-        return (uint64_t)(uintptr_t)pthread_self();
+        static __thread uint64_t cached_tid = 0;
     #endif
+    if (cached_tid != 0) return cached_tid;
+    #if defined(__linux__)
+        cached_tid = (uint64_t)syscall(SYS_gettid);
+    #elif defined(__APPLE__)
+        pthread_threadid_np(NULL, &cached_tid);
+    #elif defined(_WIN32)
+        cached_tid = (uint64_t)GetCurrentThreadId();
+    #else
+        cached_tid = (uint64_t)(uintptr_t)pthread_self();
+    #endif
+    return cached_tid;
 }
 
 #include "logger.h"

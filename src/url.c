@@ -1,4 +1,3 @@
-
 #include <string.h>
 #include <stdlib.h>
 #include "url.h"
@@ -58,14 +57,7 @@ static void url_decode_in_place(char *str)
 void free_url(struct http_url *url)
 {
     if(url==NULL) return;
-    free(url->schema);
-    free(url->host);
-    free(url->port);
-    free(url->path);
-    url->host=NULL;
-    url->schema=NULL;
-    url->port=NULL;
-    url->path=NULL;
+    memset(url,0,sizeof(*url));
 }
 
 int validate_port(char *port)
@@ -117,19 +109,11 @@ int parse_url(char *input, struct http_url *url)
 
     size_t len = host - input;
     
-    if(strncmp(input,"http",4)==0 || strncmp(input,"https",5)==0)
+    if (strncmp(input, "http", 4) == 0 || strncmp(input, "https", 5) == 0)
     {
-        url->schema=malloc(len+1);
-        if(url->schema!=NULL)
-        {
-            strncpy(url->schema,input,len);
-            url->schema[len]='\0';
-        }
-        else return return_code;
-    }
-    else
-    {
-        return return_code;
+        if (len >= sizeof(url->schema)) return return_code;
+        strncpy(url->schema, input, len);
+        url->schema[len] = '\0';
     }
 
     host+=3;
@@ -144,16 +128,9 @@ int parse_url(char *input, struct http_url *url)
     {
         // *port='\0';
         len = port - host;
-        url->host = malloc(len+1);
-        if(url->host==NULL || len==0)
-        {
-            goto cleanup;
-        }
-        else
-        {
-            strncpy(url->host,host,len);
-            url->host[len]='\0';
-        }
+        if(len == 0 || len >= sizeof(url->host)) goto cleanup;
+        strncpy(url->host,host,len);
+        url->host[len]='\0';
         port++;
         if(*port == '\0' || *port == '/')
         {
@@ -162,100 +139,47 @@ int parse_url(char *input, struct http_url *url)
         path = strchr(port,'/');
         if(path==NULL)
         {
-            url->path=malloc(2);
-            if(url->path==NULL)
-            {
-                goto cleanup;
-            }
             strcpy(url->path,"/");
 
             if(validate_port(port)==1)
             {
                 goto cleanup;
             }
-            len = strlen(port);
-            url->port = malloc(len+1);
-            if(url->port==NULL)
-            {
-                goto cleanup;
-            }
-            strcpy(url->port,port);
-            url->port[len]='\0';
+            strcpy(url->path, "/");
+            strcpy(url->port, port);
             return 0;
         }
         len = path - port;
-        if(len>5)
-        {
+        if(len == 0 || len>=sizeof(url->port) || len>5)
             goto cleanup;
-        }
-        char temp[6];
-        strncpy(temp,port,len);
-        temp[len]='\0';
-        if(validate_port(temp)==1) 
-        {
-            goto cleanup;
-        }
-        url->port=malloc(strlen(temp)+1);
-        if(url->port==NULL)
-        {
-            goto cleanup;
-        }
-        strcpy(url->port,temp);
-        url->path = malloc(strlen(path) + 1);
-
-        if (url->path == NULL)
-        {
-            goto cleanup;
-        }
-
+        strncpy(url->port,port,len);
+        url->port[len]='\0';
+        if(validate_port(url->port)==1 || strlen(path) >= sizeof(url->path)) goto cleanup;
         strcpy(url->path,path);
     }
     else
     {
-        url->port = malloc(4);
-
-        if (url->port == NULL)
-        {
-            goto cleanup;
-        }
         strcpy(url->port, strcmp(url->schema, "https") == 0 ? "443" : "80");
 
         path = strchr(host,'/');
         if(path==NULL)
         {
-            url->path = malloc(2);
-
-            if (url->path == NULL)
-            {
-                goto cleanup;
-            }
             strcpy(url->path, "/");
             len = strlen(host);
-            if(validate_host(host)==1)
-            {
-                goto cleanup;
-            }
+            if(len >= sizeof(url->host) || validate_host(host)==1) goto cleanup;
+            strcpy(url->host,host);
         }
         else
         {
-            len = strlen(path);
-            url->path = malloc(len + 1);
-            if (url->path == NULL)
-            {
-                goto cleanup;
-            }
+            if (strlen(path) >= sizeof(url->path)) goto cleanup;
             strcpy(url->path,path);
             len = path - host;
         }
-        url->host= malloc(len+1);
-        if(url->host==NULL)
+        
+        if(path != NULL)
         {
-            goto cleanup;
-        }
-        if(path==NULL)
-        strcpy(url->host,host);
-        else
-        {
+            len = path - host;
+            if(len == 0 || len >= sizeof(url->host)) goto cleanup;
             strncpy(url->host,host,len);
             url->host[len]='\0';
             if(validate_host(url->host)==1)

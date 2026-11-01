@@ -64,8 +64,6 @@ static void session_reset(struct client_session *session)
         session->buffer[0] = '\0';
     }
 
-    set_socket_non_blocking(client_fd);
-    set_socket_timeout(client_fd);
     session->engine->mod(session->engine,client_fd,ENGINE_READ | ENGINE_ONESHOT,session);
 }
 
