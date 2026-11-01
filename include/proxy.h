@@ -45,6 +45,7 @@ struct client_session {
     char upstream_host[256];
     char upstream_port[16];
     bool upstream_is_https;
+    char initial_buffer[4096];
 };
 
 

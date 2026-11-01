@@ -27,13 +27,13 @@ struct client_session *session_create(int client_fd,struct poll_engine *engine)
     session->engine = engine;
     session->con.upstream_fd = -1;
     session->level = LEVEL_CLIENT_READ_HEADERS;
-    session->capacity = 4096;
+    session->capacity = sizeof(session->initial_buffer);
     session->total = 0;
     session->offset = 0;
-    session->buffer = malloc(session->capacity);
+    session->buffer = session->initial_buffer;
     session->url= (struct http_url){0};
     session->req = (struct http_request){0};
-
+    session->buffer[0]='\0';
     if (session->buffer == NULL)
     {
         free(session);
@@ -59,10 +59,13 @@ static void session_reset(struct client_session *session)
     session->level = LEVEL_CLIENT_READ_HEADERS;
     session->total = 0;
     session->offset = 0;
-    if (session->buffer != NULL)
+    if (session->buffer != session->initial_buffer)
     {
-        session->buffer[0] = '\0';
+        free(session->buffer);
+        session->buffer = session->initial_buffer;
+        session->capacity = sizeof(session->initial_buffer);
     }
+    session->buffer[0] = '\0';
 
     session->engine->mod(session->engine,client_fd,ENGINE_READ | ENGINE_ONESHOT,session);
 }
@@ -81,7 +84,7 @@ void session_free(struct client_session *session)
             session->engine->del(session->engine, session->con.upstream_fd);
         }
     }
-    if (session->buffer != NULL)
+    if (session->buffer != NULL && session->buffer != session->initial_buffer)
     {
         free(session->buffer);
         session->buffer = NULL;
@@ -154,8 +157,16 @@ int proxy_handle_client(struct client_session *session)
                 send_client_error(client_fd, 413, "Request headers exceed maximum allowed size\n");
                 return res;
             }
-            char * new_buf = realloc(buffer,capacity);
-            if(new_buf==NULL)
+            char *new_buf;
+            if (buffer == session->initial_buffer) {
+                new_buf = malloc(capacity);
+                if (new_buf != NULL) {
+                    memcpy(new_buf, session->initial_buffer, total + 1);
+                }
+            }
+            else new_buf = realloc(buffer, capacity);
+            
+            if (new_buf == NULL)
             {
                 send_client_error(client_fd, 500, "Internal server error: out of memory\n");
                 return res;

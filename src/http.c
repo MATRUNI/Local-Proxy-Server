@@ -25,34 +25,50 @@ static int parseRequestLine(char *line, struct http_request *req)
     return 0;
 }
 
-static void trim(char *s)
+static char *trim(char *s)
 {
-    char *str = s;
-    size_t len=strlen(s);
-    while(len>0 && *str==' ' && s[len-1]==' ')
+    if (s == NULL || *s == '\0') return s;
+    char *start = s;
+    size_t len = strlen(start);
+    if (len == 0) return start;
+    char *end = start + len - 1;
+    if (*start == ' ') start++;
+    if (end >= start && (*end == ' ' || *end == '\r')) *end-- = '\0';
+
+    if (*start == ' ' || *start == '\t')
     {
-        str++;
-        s[--len]='\0';
+        while (*start == ' ' || *start == '\t') start++;
     }
-    while(len>0 && s[len-1]==' ') s[--len]='\0';
-    while(*str==' ') str++;
-    memmove(s,str,strlen(str)+1);
+    if (end >= start && (*end == ' ' || *end == '\t' || *end == '\r'))
+    {
+        while (end >= start && (*end == ' ' || *end == '\t' || *end == '\r'))
+        {
+            *end-- = '\0';
+        }
+    }
+    return start;
 }
 
-static int add_header (char *line,struct http_header *h)
+static int add_header(char *line, struct http_header *h)
 {
-    if(line==NULL || h==NULL) return 1;
-    char *value=strchr(line,':');
-    if(value==NULL) return 1;
-    // remove extra spaces
-    *value='\0';
-    value++;
-    trim(line);
-    trim(value);
-    h->name=line;
-    h->value=value;
+    if (line == NULL || h == NULL) return 1;
+    char *colon = strchr(line, ':');
+    if (colon == NULL) return 1;
+    *colon = '\0';
+    if (colon > line && (colon[-1]==' ' || colon[-1]=='\t'))
+    {
+        char *end = colon - 1;
+        while (end >= line && (*end == ' ' || *end == '\t'))
+        {
+            *end-- = '\0';
+        }
+    }
+
+    h->name = line;
+    h->value = trim(colon + 1);
     return 0;
 }
+
 
 static int parse_headers(char *buffer,struct http_headers *headers)
 {
