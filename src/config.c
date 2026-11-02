@@ -148,6 +148,34 @@ int parse_config(int argc, char **argv, struct proxy_config *config)
             write_log(LOG_INFO,"Number of Processors currently Online: %ld",online_core);
             write_log(LOG_DEBUG,"Max number of threads allowed: %ld",online_core*2);
         }
+        else if (strcasecmp(argv[i], "-u") == 0 || strcasecmp(argv[i], "--url") == 0)
+        {
+            if (i + 1 < argc)
+            strncpy(config->stress.target_url, argv[++i], sizeof(config->stress.target_url) - 1);
+        }
+        else if (strcasecmp(argv[i], "-c") == 0 || strcasecmp(argv[i], "--concurrent") == 0)
+        {
+            if (i + 1 < argc)
+            config->stress.concurrency = atoi(argv[++i]);
+        }
+        else if (strcasecmp(argv[i], "-n") == 0 || strcasecmp(argv[i], "--requests") == 0)
+        {
+            if (i + 1 < argc)
+            config->stress.total_requests = atol(argv[++i]);
+        }
+        else if (strcasecmp(argv[i], "-X") == 0 || strcasecmp(argv[i], "--method") == 0)
+        {
+            if (i + 1 < argc)
+            strncpy(config->stress.method, argv[++i], sizeof(config->stress.method) - 1);
+        }
+        else if (strcasecmp(argv[i], "-d") == 0 || strcasecmp(argv[i], "--data") == 0)
+        {
+            if(i + 1 < argc)
+            {
+                strncpy(config->stress.body, argv[++i], sizeof(config->stress.body) - 1);
+                config->stress.body_len = strlen(config->stress.body);
+            }
+        }
         else if (strcasecmp(argv[i], "-h") == 0 || strcasecmp(argv[i], "--help") == 0)
         {
             config->mode = MODE_HELP;

@@ -2,6 +2,7 @@
 #define CONFIG_H
 #include <stdbool.h>
 #include <stdio.h>
+#include "stress.h"
 #define THREAD_STACK_SIZE (256 * 1024)
 #define LOGGER_THREAD_STACK_SIZE (32 * 1024)
 #define PROXY_TIMEOUT_SEC 10
@@ -24,6 +25,8 @@ struct proxy_config
     size_t max_log_size;
     int max_log_files;
     char log_dir[128];
+
+    struct stress_config stress;
 };
 
 int parse_config(int argc, char **argv, struct proxy_config *config);

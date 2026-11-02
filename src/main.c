@@ -277,7 +277,7 @@ int main(int argc, char *argv[])
             break;
 
         case MODE_STRESS:
-            printf("Stress test mode not implemented yet!\n");
+            status = run_stress_engine(&config);
             break;
 
         case MODE_SERVER:
