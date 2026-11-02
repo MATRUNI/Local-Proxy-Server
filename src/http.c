@@ -185,7 +185,10 @@ static int parseResponseLine(char *line, struct http_response *res)
     if (status_code_end == NULL) return 1;
 
     *status_code_end = '\0';
-    res->statusCode = atoi(status_code_start);
+    res->statusCode = (status_code_start[0] - '0') * 100 +
+                  (status_code_start[1] - '0') * 10 +
+                  (status_code_start[2] - '0');
+
     res->statusText = status_code_end + 1;
 
     return 0;

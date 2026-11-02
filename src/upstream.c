@@ -184,51 +184,50 @@ int stream_body(struct proxy_connection *con,bool to_client,char *buffer,size_t 
     return 0;
 }
 
-int sendHTTPRequest(struct proxy_connection *con, struct http_request *req ,struct http_url *url)
+int sendHTTPRequest(struct proxy_connection *con, struct http_request *req, struct http_url *url)
 {
     char request[8192];
     size_t offset = 0;
-    int temp;
 
-    temp = snprintf(request + offset,sizeof(request) - offset,
-        "%s %s %s\r\n",req->method,url->path,req->version);
-    if(temp<0 || (size_t)temp >= sizeof(request)-offset) return 1;
-    else
-    {
-        offset+=temp;
-    }
-    temp = snprintf(request + offset,sizeof(request) - offset,
-    "Host: %s\r\n",url->host);
-    if(temp<0 || (size_t)temp >= sizeof(request)-offset) return 1;
-    else
-    {
-        offset+=temp;
-    }
+    size_t mlen = strlen(req->method);
+    size_t plen = strlen(url->path);
+    size_t vlen = strlen(req->version);
+    if (offset + mlen + plen + vlen + 4 >= sizeof(request)) return 1;
+
+    memcpy(request + offset, req->method, mlen);
+    offset += mlen;
+    request[offset++] = ' ';
+    memcpy(request + offset, url->path, plen);
+    offset += plen;
+    request[offset++] = ' ';
+    memcpy(request + offset, req->version, vlen);
+    offset += vlen;
+    memcpy(request + offset, "\r\n", 2);
+    offset += 2;
+
+    int temp = write_header(request + offset, sizeof(request) - offset, "Host", url->host);
+    if (temp < 0) return 1;
+    offset += temp;
 
     for (size_t i = 0; i < req->headers.count; i++)
     {
-        if (strcasecmp(req->headers.items[i].name, "Host") == 0)
+        char h0 = req->headers.items[i].name[0];
+        if ((h0 == 'H' || h0 == 'h') && strcasecmp(req->headers.items[i].name, "Host") == 0)
         {
             continue;
         }
-        temp = write_header(request+offset,sizeof(request)-offset,req->headers.items[i].name,req->headers.items[i].value);
-        if(temp<0 || (size_t)temp >= sizeof(request)-offset) return 1;
-        offset+=temp;
+        temp = write_header(request + offset, sizeof(request) - offset, req->headers.items[i].name, req->headers.items[i].value);
+        if (temp < 0) return 1;
+        offset += temp;
     }
 
-    temp = snprintf(request + offset,sizeof(request) - offset,"\r\n");
-    if(temp<0 || (size_t)temp >= sizeof(request)-offset) return 1;
-    else
-    {
-        offset+=temp;
-    }
-    if(conn_write_all(con,request,offset)==1)
-    {
-        return 1;
-    }
+    if (offset + 2 >= sizeof(request)) return 1;
+    memcpy(request + offset, "\r\n", 2);
+    offset += 2;
 
-    return 0;
+    return conn_write_all(con, request, offset);
 }
+
 
 int receiveHTTPResponse(struct proxy_connection *con)
 {
@@ -299,8 +298,25 @@ int receiveHTTPResponse(struct proxy_connection *con)
         goto cleanup_buffer;
     }
 
-    size_t headers_len = snprintf(header_out_buf, header_out_cap, "%s %d %s\r\n",
-                                  res.version, res.statusCode, res.statusText);
+    size_t vlen = strlen(res.version);
+    size_t tlen = strlen(res.statusText);
+    if (vlen + tlen + 7 >= header_out_cap)
+    {
+        if (header_out_buf != stack_out)
+            free(header_out_buf);
+        free_response(&res);
+        goto cleanup_buffer;
+    }
+    memcpy(header_out_buf, res.version, vlen);
+    header_out_buf[vlen] = ' ';
+    header_out_buf[vlen + 1] = '0' + (res.statusCode / 100);
+    header_out_buf[vlen + 2] = '0' + ((res.statusCode / 10) % 10);
+    header_out_buf[vlen + 3] = '0' + (res.statusCode % 10);
+    header_out_buf[vlen + 4] = ' ';
+    memcpy(header_out_buf + vlen + 5, res.statusText, tlen);
+    memcpy(header_out_buf + vlen + 5 + tlen, "\r\n", 2);
+    size_t headers_len = vlen + 5 + tlen + 2;
+
 
     if (send_headers(con->client_fd, header_out_buf, header_out_cap, &res.headers, headers_len, 0) == 1)
     {
