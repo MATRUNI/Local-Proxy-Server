@@ -87,14 +87,22 @@ int make_api_call(const char *host, const char *port, bool *in_progress)
     return server_fd;
 }
 
-static int write_header(char *buffer,size_t len,const char *name,const char *value)
+static int write_header(char *buffer, size_t len, const char *name, const char *value)
 {
-    int written = snprintf(buffer,len,"%s: %s\r\n",name,value);
-    if(written<0 || (size_t)written >= len)
-    return -1;
+    size_t nlen = strlen(name);
+    size_t vlen = strlen(value);
+    if (nlen + vlen + 4 >= len) return -1;
 
-    return written;
+    memcpy(buffer, name, nlen);
+    buffer += nlen;
+    memcpy(buffer, ": ", 2);
+    buffer += 2;
+    memcpy(buffer, value, vlen);
+    buffer += vlen;
+    memcpy(buffer, "\r\n", 2);
+    return (int)(nlen + vlen + 4);
 }
+
 
 static int send_headers(int fd,char *new_buffer,size_t total, struct http_headers *headers, size_t remaining ,int cors_included)
 {
@@ -115,30 +123,22 @@ static int send_headers(int fd,char *new_buffer,size_t total, struct http_header
         }
     }
 
-    if(cors_included==0)
+    if (cors_included == 0)
     {
-        char *cors_headers[] = {
-            "Access-Control-Allow-Origin",
-            "Access-Control-Allow-Methods",
-            "Access-Control-Allow-Headers",
-            "Access-Control-Expose-Headers"
-        };
-        char *cors_values[] = {
-            "*",
-            "GET, POST, PUT, DELETE, OPTIONS",
-            "*",
-            "Content-Length, Content-Type",
-        };
-        for(int i=0;i<4;i++)
+        static const char cors_block[] =
+            "Access-Control-Allow-Origin: *\r\n"
+            "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n"
+            "Access-Control-Allow-Headers: *\r\n"
+            "Access-Control-Expose-Headers: Content-Length, Content-Type\r\n";
+        size_t cors_len = sizeof(cors_block) - 1;
+        if (remaining + cors_len >= total)
         {
-            int temp=write_header(new_buffer+remaining,total-remaining,cors_headers[i],cors_values[i]);
-            if(temp<0)
-            {
-                return -1;
-            }
-            remaining+=temp;
+            return -1;
         }
+        memcpy(new_buffer + remaining, cors_block, cors_len);
+        remaining += cors_len;
     }
+
     memcpy(new_buffer + remaining, "\r\n", 2);
     remaining += 2;
     if(send_all(fd,new_buffer,remaining)==1)

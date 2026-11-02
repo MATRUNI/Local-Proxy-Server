@@ -155,14 +155,20 @@ int parse_request(char *buffer, struct http_request *req)
 
 const char *get_header_value(const struct http_headers *headers, const char *name)
 {
-    if(name==NULL || headers==NULL || headers->items==NULL) return NULL;
-    for(size_t i=0;i<headers->count;i++)
+    if (name == NULL || headers == NULL || headers->items == NULL) return NULL;
+    char target_c = name[0];
+    for (size_t i = 0; i < headers->count; i++)
     {
-        if(headers->items[i].name!=NULL && headers->items[i].value!=NULL && strcasecmp(headers->items[i].name,name)==0)
-            return headers->items[i].value;
+        if (headers->items[i].name != NULL && headers->items[i].value != NULL)
+        {
+            char h_c = headers->items[i].name[0];
+            if ((h_c == target_c || (h_c ^ target_c) == 32) && strcasecmp(headers->items[i].name, name) == 0)
+                return headers->items[i].value;
+        }
     }
     return NULL;
 }
+
 
 static int parseResponseLine(char *line, struct http_response *res)
 {

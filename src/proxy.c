@@ -221,14 +221,14 @@ int proxy_handle_client(struct client_session *session)
         res = 0;
         goto cleanup_req;
     }
-    const char *methods[] = {"GET","POST","PUT","DELETE","HEAD","PATCH"};
-    for(size_t i=0;i<6;i++)
+    
+    if (session->req.method[0] != 'G' || strcmp(session->req.method, "GET") != 0)
     {
-        if(strcmp(session->req.method,methods[i])==0)
-        {
-            break;
-        }
-        if(i==5)
+        if (strcmp(session->req.method, "POST") != 0 &&
+            strcmp(session->req.method, "PUT") != 0 &&
+            strcmp(session->req.method, "DELETE") != 0 &&
+            strcmp(session->req.method, "HEAD") != 0 &&
+            strcmp(session->req.method, "PATCH") != 0)
         {
             write_log(LOG_WARN, "Invalid request method.");
             send_client_error(client_fd, 405, "HTTP method not supported by proxy\n");
@@ -237,14 +237,19 @@ int proxy_handle_client(struct client_session *session)
     }
 
     write_log(LOG_INFO, "%s %s %s",session->req.method,session->req.path,session->req.version);
-    const char *target = get_header_value(&session->req.headers,"X-Target-Url");
-    if(target==NULL && strncmp(session->req.path,"/?url=",6)==0)
+    
+    const char *target = NULL;
+    if (strncmp(session->req.path, "/?url=", 6) == 0)
     {
-        target = session->req.path+6;
+        target = session->req.path + 6;
     }
-    if(target==NULL && (strncmp(session->req.path,"https://",8)==0 || strncmp(session->req.path,"http://",7)==0))
+    else if (strncmp(session->req.path, "https://", 8) == 0 || strncmp(session->req.path, "http://", 7) == 0)
     {
         target = session->req.path;
+    }
+    else
+    {
+        target = get_header_value(&session->req.headers, "X-Target-Url");
     }
 
     if(target==NULL || parse_url((char *)target,&session->url)==1)

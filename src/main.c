@@ -56,19 +56,16 @@ static void *proxy_thread_worker(void *arg)
             {
                 while (1)
                 {
-                    int client_fd = accept(self->listen_fd,NULL,NULL);
-                    
-                    if (client_fd == -1)
-                    {
-                        break;
-                    }
-                    int res = set_socket_non_blocking(client_fd);
+                    #if defined(__linux__)
+                        int client_fd = accept4(self->listen_fd, NULL, NULL, SOCK_NONBLOCK);
+                        if (client_fd == -1) break;
+                    #else
+                        int client_fd = accept(self->listen_fd, NULL, NULL);
+                        if (client_fd == -1) break;
+                        set_socket_non_blocking(client_fd);
+                    #endif
+
                     set_socket_nodelay(client_fd);
-                    if(res==-1)
-                    {
-                        close_socket(client_fd);
-                        continue;
-                    }
                     struct client_session *ses = session_create(client_fd,self->engine);
                     if(ses==NULL)
                     {
