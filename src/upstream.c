@@ -103,49 +103,27 @@ static int write_header(char *buffer, size_t len, const char *name, const char *
     return (int)(nlen + vlen + 4);
 }
 
-
-static int send_headers(int fd,char *new_buffer,size_t total, struct http_headers *headers, size_t remaining ,int cors_included)
+static int stream_remaining(struct proxy_connection *con, bool to_client, char *buffer, size_t capacity, long remaining_bytes)
 {
-    for (size_t i = 0; i < headers->count; i++)
+    while (remaining_bytes > 0)
     {
-        if (strncasecmp(headers->items[i].name, "Access-Control-", 15) == 0)
-            continue;
-        if( headers->items[i].name !=NULL)
+        size_t to_read = remaining_bytes > (long)capacity ? capacity : (size_t)remaining_bytes;
+        int n = to_client ? con->read(con, buffer, to_read) : recv(con->client_fd, buffer, to_read, 0);
+        if (n <= 0)
         {
-            const char *value = headers->items[i].value;
-            int temp;
-            temp =write_header(new_buffer+remaining,total-remaining,headers->items[i].name,value);
-            if(temp<0)
-            {
-                return -1;
+            if (n == 0) break;
+            if (socket_errno == EAGAIN_COMPAT || socket_errno == EWOULDBLOCK_COMPAT) {
+                write_log(LOG_WARN, "%s read timed out after 10s.", to_client ? "Upstream" : "Client");
+            } else {
+                perror("recv");
             }
-            remaining+=temp;
+            return 1;
         }
+        int err = to_client ? send_all(con->client_fd, buffer, n) : conn_write_all(con, buffer, n);
+        if (err == 1) return 1;
+        remaining_bytes -= n;
     }
-
-    if (cors_included == 0)
-    {
-        static const char cors_block[] =
-            "Access-Control-Allow-Origin: *\r\n"
-            "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n"
-            "Access-Control-Allow-Headers: *\r\n"
-            "Access-Control-Expose-Headers: Content-Length, Content-Type\r\n";
-        size_t cors_len = sizeof(cors_block) - 1;
-        if (remaining + cors_len >= total)
-        {
-            return -1;
-        }
-        memcpy(new_buffer + remaining, cors_block, cors_len);
-        remaining += cors_len;
-    }
-
-    memcpy(new_buffer + remaining, "\r\n", 2);
-    remaining += 2;
-    if(send_all(fd,new_buffer,remaining)==1)
-    {
-        return 1;
-    }
-    return 0; // success
+    return 0;
 }
 
 int stream_body(struct proxy_connection *con,bool to_client,char *buffer,size_t capacity, size_t total,char *headers_end,long content)
@@ -163,25 +141,8 @@ int stream_body(struct proxy_connection *con,bool to_client,char *buffer,size_t 
         if (err == 1) return 1;
     }
     long remaining_bytes = content - initial_body_bytes;
-    while(remaining_bytes>0)
-    {
-        size_t to_read = remaining_bytes > (long) capacity ? capacity : (size_t) remaining_bytes;
-        int n = to_client ? con->read(con, buffer, to_read) : recv(con->client_fd, buffer, to_read, 0);
-        if(n<=0)
-        {
-            if(n==0) break;
-            if (socket_errno == EAGAIN_COMPAT || socket_errno == EWOULDBLOCK_COMPAT) {
-                write_log(LOG_WARN, "%s read timed out after 10s.", to_client ? "Upstream" : "Client");
-            } else {
-                perror("recv");
-            }
-            return 1;
-        }
-        int err = to_client ? send_all(con->client_fd, buffer, n) : conn_write_all(con, buffer, n);
-        if (err == 1) return 1;
-        remaining_bytes -=n;
-    }
-    return 0;
+    
+    return (remaining_bytes > 0) ? stream_remaining(con, to_client, buffer, capacity, remaining_bytes) : 0;
 }
 
 int sendHTTPRequest(struct proxy_connection *con, struct http_request *req, struct http_url *url)
@@ -227,7 +188,6 @@ int sendHTTPRequest(struct proxy_connection *con, struct http_request *req, stru
 
     return conn_write_all(con, request, offset);
 }
-
 
 int receiveHTTPResponse(struct proxy_connection *con)
 {
@@ -282,76 +242,45 @@ int receiveHTTPResponse(struct proxy_connection *con)
         fprintf(stderr, "Incomplete HTTP response headers.\n");
         goto cleanup_buffer;
     }
+    int status_code = 200;
+    char *sp = strchr(buffer, ' ');
+    if (sp != NULL && sp < headers_end) {
+        status_code = (int)strtol(sp + 1, NULL, 10);
+    }
+    con->status_code = status_code;
     
-    struct http_response res={0};
-    if(parse_response(buffer,&res)!=0)
-    {
-        goto cleanup_buffer;
-    }
+    long content_length = -1;
+    char *cl = strcasestr(buffer, "\ncontent-length:");
 
-    size_t header_out_cap = total + 1024;
-    char stack_out[4096];
-    char *header_out_buf = (header_out_cap <= sizeof(stack_out)) ? stack_out : malloc(header_out_cap);
-    if (header_out_buf == NULL)
-    {
-        free_response(&res);
-        goto cleanup_buffer;
-    }
+    if (cl != NULL && cl < headers_end)
+        content_length = strtol(cl + 16, NULL, 10);
+    size_t headers_len = (size_t)(headers_end + 4 - buffer);
+    size_t initial_body = (total > headers_len) ? (total - headers_len) : 0;
 
-    size_t vlen = strlen(res.version);
-    size_t tlen = strlen(res.statusText);
-    if (vlen + tlen + 7 >= header_out_cap)
-    {
-        if (header_out_buf != stack_out)
-            free(header_out_buf);
-        free_response(&res);
-        goto cleanup_buffer;
-    }
-    memcpy(header_out_buf, res.version, vlen);
-    header_out_buf[vlen] = ' ';
-    header_out_buf[vlen + 1] = '0' + (res.statusCode / 100);
-    header_out_buf[vlen + 2] = '0' + ((res.statusCode / 10) % 10);
-    header_out_buf[vlen + 3] = '0' + (res.statusCode % 10);
-    header_out_buf[vlen + 4] = ' ';
-    memcpy(header_out_buf + vlen + 5, res.statusText, tlen);
-    memcpy(header_out_buf + vlen + 5 + tlen, "\r\n", 2);
-    size_t headers_len = vlen + 5 + tlen + 2;
+    if(content_length >= 0 && initial_body > (size_t)content_length)
+        initial_body = (size_t)content_length;
 
-
-    if (send_headers(con->client_fd, header_out_buf, header_out_cap, &res.headers, headers_len, 0) == 1)
-    {
-        if(header_out_buf!=stack_out)
-            free(header_out_buf);
-        free_response(&res);
+    size_t to_send = headers_len + initial_body;
+    if (send_all(con->client_fd, buffer, to_send) == 1)
         goto cleanup_buffer;
-    }
-    if(header_out_buf!=stack_out)
-        free(header_out_buf);
-    const char *len_str = get_header_value(&res.headers, "Content-Length");
-    con->status_code = res.statusCode;
-    if (len_str != NULL)
+
+    if (content_length > 0)
     {
-        long content_length = strtol(len_str, NULL, 10);
-        con->body_bytes_sent = (content_length>0) ? (size_t)content_length : 0;
-        free_response(&res);
-        if(stream_body(con,true,buffer,capacity,total,headers_end,content_length)==1)
+        con->body_bytes_sent = (size_t)content_length;
+        long remaining = content_length - (long)initial_body;
+        if( remaining>0 && stream_remaining(con,true,buffer,capacity,remaining)==1)
         {
             goto cleanup_buffer;
         }
     }
+    else if(content_length == 0)
+        con->body_bytes_sent = 0;
     else
     {
-        free_response(&res);
         char *body_start = headers_end+4;
         size_t initial_body_bytes = total - (body_start-buffer);
         con->body_bytes_sent=initial_body_bytes;
-        if(initial_body_bytes>0)
-        {
-            if(send_all(con->client_fd,body_start,initial_body_bytes)==1)
-            {
-                goto cleanup_buffer;
-            }
-        }
+
         if(initial_body_bytes >= 5  && memcmp(body_start + initial_body_bytes - 5, "0\r\n\r\n",5) == 0)
         {
             return_code = 0;

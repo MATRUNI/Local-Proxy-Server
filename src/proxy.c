@@ -236,7 +236,7 @@ int proxy_handle_client(struct client_session *session)
         }
     }
 
-    write_log(LOG_INFO, "%s %s %s",session->req.method,session->req.path,session->req.version);
+    write_log(LOG_DEBUG, "%s %s %s",session->req.method,session->req.path,session->req.version);
     
     const char *target = NULL;
     if (strncmp(session->req.path, "/?url=", 6) == 0)

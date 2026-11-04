@@ -11,6 +11,11 @@ A lightweight, blazing-fast, and memory-efficient HTTP/HTTPS reverse proxy built
 - [Prerequisites & Build](#-prerequisites--build)
 - [CLI Usage & Flags](#-cli-usage--flags)
 - [Testing & Benchmarks](#-testing--benchmarks)
+  - [Native C Multi-Threaded Stress Engine](#1-native-c-multi-threaded-stress-engine--m-stress)
+  - [Master Webpage & CDN Test Suite](#2-master-webpage--cdn-test-suite-scriptstest_suitejs)
+  - [High-Throughput Local Proxy Benchmark](#3-high-throughput-local-proxy-benchmark-scriptslocal_benchmarkjs)
+  - [Carousel Log Rotation Audit](#4-carousel-log-rotation--active-marker-audit-scriptstest_rotationjs)
+  - [Kernel Memory & Concurrency Benchmark](#5-kernel-memory--concurrency-benchmark-scriptstest_memorysh)
 - [The Journey & Engineering Evolution](#-the-journey--engineering-evolution)
 
 ---
@@ -105,16 +110,18 @@ The proxy uses the **Multi-Reactor Pattern with `SO_REUSEPORT`** (similar to mod
 │   ├── logger.h        # Asynchronous logger API and log levels (DEBUG, INFO, WARN, ERROR)
 │   ├── proxy.h         # Proxy connection management, streaming, and upstream dispatch
 │   ├── server.h        # Socket lifecycle, timeout configuration, and accept handlers
+│   ├── stress.h        # Multi-threaded native C stress engine configuration & runner
 │   ├── tls.h           # OpenSSL TLS client wrappers, context lifecycle, read/write
 │   └── url.h           # URL parser (schema, host, port, path, query extraction)
 ├── src/
 │   ├── main.c          # Mode dispatcher, Multi-Reactor event loop, worker fleet runner
-│   ├── config.c        # CLI argument parser (-p, -b, -t, -m, -l, -v) and validation
+│   ├── config.c        # CLI argument parser (-p, -b, -t, -m, -l, -v, -u, -c, -n, -X, -d)
 │   ├── server.c        # BSD socket creation, non-blocking helpers, bind, listen
 │   ├── proxy.c         # HTTP transaction pipeline, request forwarding, response streaming
 │   ├── http.c          # In-place HTTP header slicing and protocol parsing
 │   ├── http_error.c    # Error page HTML generation with CORS headers
 │   ├── logger.c        # Asynchronous double-buffering logger thread implementation
+│   ├── stress.c        # Native C multi-threaded non-blocking epoll stress engine
 │   ├── tls.c           # TLS handshake negotiation, SSL context, and socket wrappers
 │   └── url.c           # Protocol and hostname URL parsing
 ├── scripts/
@@ -148,10 +155,10 @@ sudo apt install -y build-essential libssl-dev
 ```
 
 ### Compilation
-Compile the project with full optimization and warnings enabled:
+Compile the project with full optimization, link-time optimization (LTO), and strict warnings:
 
 ```bash
-gcc -Wall -Wextra -Iinclude src/*.c -pthread -lssl -lcrypto -o build/api
+gcc -O3 -flto -march=native -Wall -Wextra -Werror -Iinclude src/*.c -pthread -lssl -lcrypto -o build/api
 ```
 
 ---
@@ -167,6 +174,7 @@ gcc -Wall -Wextra -Iinclude src/*.c -pthread -lssl -lcrypto -o build/api
 ### Command-Line Options
 ```text
 Usage: ./api -p <port> -b <ip> -t <threads> -m <server|stress|logs|help> -l <debug|info|warn|error> -v
+       ./api -m stress -u <url> -c <concurrency> -n <requests> -t <threads> -X <method> -d <data>
 ```
 
 | Flag | Long Option | Description | Default |
@@ -177,17 +185,28 @@ Usage: ./api -p <port> -b <ip> -t <threads> -m <server|stress|logs|help> -l <deb
 | `-m` | `--mode` | Run mode (`server`, `logs`, `help`, `stress`) | `server` |
 | `-l` | `--log-level` | Log verbosity (`debug`, `info`, `warn`, `error` or `d, i, w, e`) | `info` |
 | `-v` | `--verbose` | Shortcut for `-l debug` | `false` |
+| `-u` | `--url` | Target URL to benchmark (`-m stress`) | `http://127.0.0.1:17777/` |
+| `-c` | `--concurrent` | Concurrency: number of parallel connections | `50` |
+| `-n` | `--requests` | Total requests to execute (`-m stress`) | `10000` |
+| `-X` | `--method` | Custom HTTP method (`GET`, `POST`, `PUT`, `DELETE`) | `GET` |
+| `-d` | `--data` | HTTP payload / body for requests | *(empty)* |
 | `-h` | `--help` | Display usage manual | |
 
 ### Examples
 ```bash
-# Start on port 8080 bound to all interfaces with 8 threads in verbose mode
+# 1. Start proxy on port 8080 with 8 worker threads
 ./build/api -p 8080 -b 0.0.0.0 -t 8 -v
 
-# View formatted color-coded runtime access logs
+# 2. Native C Stress Benchmark: 20,000 requests, 100 concurrent connections, 4 threads
+./build/api -m stress -u http://127.0.0.1:17777/?url=http://127.0.0.1:9099/test -c 100 -n 20000 -t 4
+
+# 3. High-throughput custom POST benchmark with JSON payload
+./build/api -m stress -u http://127.0.0.1:9099/test -c 100 -n 10000 -X POST -d '{"speed":"c"}'
+
+# 4. View formatted color-coded runtime access logs
 ./build/api -m logs
 
-# Display help
+# 5. Display help
 ./build/api -h
 ```
 
@@ -195,9 +214,78 @@ Usage: ./api -p <port> -b <ip> -t <threads> -m <server|stress|logs|help> -l <deb
 
 ## 🧪 Testing & Benchmarks
 
-The proxy includes two automated test and benchmark tools:
+The proxy includes a comprehensive testing and benchmarking toolkit:
 
-### 1. Master Webpage & CDN Test Suite (`scripts/test_suite.js`)
+### 1. Native C Multi-Threaded Stress Engine (`-m stress`)
+A built-in, zero-dependency, multi-threaded C benchmarking engine powered by non-blocking event loops (`epoll` on Linux, `kqueue` on macOS, `WSAPoll` on Windows). It eliminates Node.js client CPU bottlenecks and supports persistent HTTP/1.1 keep-alive, custom HTTP methods, custom payloads, and TLS/SNI.
+
+```
+                     [ CLI Invocations / Config: run_stress_engine() ]
+                       (Target URL, Concurrency: -c, Total Reqs: -n)
+                                            │
+                             [ Lock-Free Workload Divider ]
+                      (conns = c / threads, reqs = n / threads)
+                                            │
+              ┌─────────────────────────────┼─────────────────────────────┐
+              ▼                             ▼                             ▼
+      [ Stress Worker #0 ]          [ Stress Worker #1 ]          [ Stress Worker #N-1 ]
+     Isolated poll_engine          Isolated poll_engine          Isolated poll_engine
+              │                             │                             │
+         epoll_wait()                  epoll_wait()                  epoll_wait()
+              │                             │                             │
+      ┌───────┴───────┐             ┌───────┴───────┐             ┌───────┴───────┐
+      ▼               ▼             ▼               ▼             ▼               ▼
+  conn_0..conn_K  Keep-Alive    conn_0..conn_K  Keep-Alive    conn_0..conn_K  Keep-Alive
+  (Non-blocking) (Pipelines)    (Non-blocking) (Pipelines)    (Non-blocking) (Pipelines)
+      │               │             │               │             │               │
+      └───────┬───────┘             └───────┬───────┘             └───────┬───────┘
+              │                             │                             │
+              ▼                             ▼                             ▼
+    [ Finite State Machine ]      [ Finite State Machine ]      [ Finite State Machine ]
+    CONN_CONNECTING (TCP/TLS)     CONN_CONNECTING (TCP/TLS)     CONN_CONNECTING (TCP/TLS)
+              │                             │                             │
+    CONN_SENDING (Outbound Req)   CONN_SENDING (Outbound Req)   CONN_SENDING (Outbound Req)
+              │                             │                             │
+    CONN_RECEIVING (\r\n\r\n)     CONN_RECEIVING (\r\n\r\n)     CONN_RECEIVING (\r\n\r\n)
+              │                             │                             │
+              └─────────────────────────────┼─────────────────────────────┘
+                                            │
+                                [ Main Thread Aggregator ]
+                               pthread_join() + Stop Clock
+                             (Total Req/s, Duration, Summary)
+```
+
+```bash
+# 1. Direct upstream benchmark: 20,000 requests, 100 connections, 4 threads
+./build/api -m stress -u http://127.0.0.1:9099/test -c 100 -n 20000 -t 4
+
+# 2. Full reverse proxy benchmark (Client -> Proxy -> Upstream -> Client)
+./build/api -m stress -u "http://127.0.0.1:17777/?url=http://127.0.0.1:9099/test" -c 100 -n 20000 -t 4
+
+# 3. Custom payload POST benchmark
+./build/api -m stress -u http://127.0.0.1:9099/test -c 100 -n 10000 -t 4 -X POST -d '{"speed":"c"}'
+```
+
+#### Benchmark Results (20,000 Requests, 100 Connections, 4 Threads)
+```text
+=======================================================
+                  STRESS TEST RESULTS                  
+=======================================================
+  Target:             http://127.0.0.1:9099/test
+  Method:             GET
+  Concurrency:        100 connections
+  Threads:            4 worker threads
+-------------------------------------------------------
+  Total Requests:     20000
+  Completed:          20000
+  Failed:             0
+  Duration:           0.740 seconds
+-------------------------------------------------------
+  Throughput:         27,028.54 req/sec
+=======================================================
+```
+
+### 2. Master Webpage & CDN Test Suite (`scripts/test_suite.js`)
 Runs diverse real-world tests against live production targets, verifying HTTP status codes, chunked streaming, and CORS headers:
 - **Google Homepage**: Full HTML, cookies (`Set-Cookie`), gzip compression (~90 KB)
 - **Wikipedia**: Heavyweight article on the C Programming Language (~735 KB)
@@ -215,36 +303,6 @@ Run the test suite:
 
 # 2. Run master test suite in another terminal
 node scripts/test_suite.js
-```
-
-### 2. Kernel Memory & Concurrency Benchmark (`scripts/test_memory.sh`)
-Measures kernel memory metrics (`VmRSS`, `VmHWM`) under heavy parallel load streaming 100 KB HTTPS files from remote servers:
-```bash
-bash scripts/test_memory.sh
-```
-
-#### Benchmark Results (8 Cores, 30 Concurrent Clients, 60 HTTPS Requests)
-```text
-==========================================================
-          STRESS & MEMORY BENCHMARK REPORT                
-==========================================================
-Total Requests:       60 (60 success, 0 failed)
-Peak Active Threads:  10 (1 listener + 1 logger + 8 epoll workers)
-
---- ⏱️ CONCURRENCY TIME & THROUGHPUT ---
-Burst Duration:       31.92 seconds
-Throughput:           1.9 req/sec
-Latency (Min/Avg/Max): 2149 ms / 8224 ms / 26745 ms
-
---- 🧠 KERNEL RAM FOOTPRINT (VmRSS & VmHWM) ---
-Baseline VmRSS (Idle):        8920 kB (~8.7 MB)
-Sampled Peak VmRSS:           11880 kB (~11.6 MB)
-Kernel VmHWM (High Water):    11880 kB (~11.6 MB)
-----------------------------------------------------------
-Actual RAM Added By Stress:   2960 kB (~2.8 MB)
-RAM Footprint Per Connection: 98.7 kB / client
-Cooldown VmRSS (After Load):  11880 kB
-==========================================================
 ```
 
 ### 3. High-Throughput Local Proxy Benchmark (`scripts/local_benchmark.js`)
@@ -328,6 +386,38 @@ Elapsed Time           : 4.47s
 
 ---
 
+### 5. Kernel Memory & Concurrency Benchmark (`scripts/test_memory.sh`)
+Measures kernel memory metrics (`VmRSS`, `VmHWM`) under heavy parallel load streaming 100 KB HTTPS files from remote servers:
+```bash
+bash scripts/test_memory.sh
+```
+
+#### Benchmark Results (8 Cores, 30 Concurrent Clients, 60 HTTPS Requests)
+```text
+==========================================================
+          STRESS & MEMORY BENCHMARK REPORT                
+==========================================================
+Total Requests:       60 (60 success, 0 failed)
+Peak Active Threads:  10 (1 listener + 1 logger + 8 epoll workers)
+
+--- ⏱️ CONCURRENCY TIME & THROUGHPUT ---
+Burst Duration:       31.92 seconds
+Throughput:           1.9 req/sec
+Latency (Min/Avg/Max): 2149 ms / 8224 ms / 26745 ms
+
+--- 🧠 KERNEL RAM FOOTPRINT (VmRSS & VmHWM) ---
+Baseline VmRSS (Idle):        8920 kB (~8.7 MB)
+Sampled Peak VmRSS:           11880 kB (~11.6 MB)
+Kernel VmHWM (High Water):    11880 kB (~11.6 MB)
+----------------------------------------------------------
+Actual RAM Added By Stress:   2960 kB (~2.8 MB)
+RAM Footprint Per Connection: 98.7 kB / client
+Cooldown VmRSS (After Load):  11880 kB
+==========================================================
+```
+
+---
+
 ## 📖 The Journey & Engineering Evolution
 
 This project was built from absolute scratch as a deep dive into systems programming, computer networking, and memory architectures:
@@ -345,6 +435,12 @@ This project was built from absolute scratch as a deep dive into systems program
    - **40ms Nagle / Delayed-ACK Discovery**: Diagnosed the 40ms latency freeze caused by Nagle's algorithm waiting on Linux's delayed ACK timer, resolving it with `TCP_NODELAY` and dropping latency from 41.9ms to 0.46ms (91x speedup).
    - **DNS Resolver Bypass**: Bypassed glibc's `getaddrinfo()` NSS file-reads on IP literals using `inet_pton()`.
    - **Performance Milestone**: Scaled from 3,113 req/sec to **17,305.2 req/sec** with 100% success rate across 20,000 requests.
+9. **The Native C Stress Engine (27,000+ Req/Sec Benchmark Engine)**:
+   - **Eliminating Node.js Overhead**: Removed external Node.js benchmark dependencies whose multi-process event loop saturated client CPU cores at 18k req/sec.
+   - **Zero-Dependency Multi-Threaded Event Loop**: Built a pure C non-blocking stress client in `src/stress.c` reusing the core cross-platform abstraction `poll_engine` (`epoll`/`kqueue`/`WSAPoll`).
+   - **Lock-Free Concurrency**: Partitioned connections and target request quotas evenly across worker threads with isolated event loops, avoiding all thread locking and mutex contention.
+   - **Full Protocol Flexibility**: Added CLI flags (`-u`, `-c`, `-n`, `-X`, `-d`) for benchmarking custom HTTP methods (`POST`, `PUT`), custom JSON payloads, and dynamic TLS/SNI negotiation for HTTPS targets.
+   - **Performance Milestone**: Reached **27,028 req/sec direct** and **25,127 req/sec fully proxied** with a 100% success rate across 20,000 requests.
 
 ---
 

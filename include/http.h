@@ -1,6 +1,7 @@
 #ifndef HTTP_H
 #define HTTP_H
 #include <stddef.h>
+#include <stdbool.h>
 #define HTTP_MAX_INLINE_HEADERS 32
 struct http_header
 {
