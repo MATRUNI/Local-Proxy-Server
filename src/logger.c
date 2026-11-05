@@ -71,7 +71,7 @@ static size_t waiting_buf_size = 0;
 static volatile int logger_running = 0;
 static pthread_t tid;
 
-static log_level_t current_log_level = LOG_INFO;
+log_level_t current_log_level = LOG_INFO;
 
 static const char *log_value[] = {
     "DEBUG",

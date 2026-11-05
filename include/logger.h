@@ -9,6 +9,8 @@ typedef enum {
     LOG_ERROR = 3
 } log_level_t;
 
+extern log_level_t current_log_level;
+
 void change_log_level(int new_level);
 
 int init_logger(char *log_file_dir, int log_file_count, size_t log_file_size);

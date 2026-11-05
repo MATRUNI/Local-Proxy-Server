@@ -324,16 +324,24 @@ int proxy_handle_client(struct client_session *session)
             }
         }
     }
-    uint64_t start_ms = get_time_ms();
+    
+    uint64_t start_ms = 0;
+    if (current_log_level <= LOG_INFO) {
+        start_ms = get_time_ms();
+    }
 
-    if(receiveHTTPResponse(&session->con)==1)
+    if (receiveHTTPResponse(&session->con) == 1)
     {
         send_client_error(client_fd, 502, "Target server closed connection without valid HTTP response\n");
         goto cleanup_con;
     }
 
-    uint64_t latency_ms = get_time_ms() - start_ms;
-    write_log(LOG_INFO, "%s %s -> %d (%lu bytes) in %llu ms",session->req.method, session->url.host, session->con.status_code, (unsigned long)session->con.body_bytes_sent ,(unsigned long long)latency_ms);
+    if (current_log_level <= LOG_INFO) {
+        uint64_t latency_ms = get_time_ms() - start_ms;
+        write_log(LOG_INFO, "%s %s -> %d (%lu bytes) in %llu ms",
+                  session->req.method, session->url.host, session->con.status_code,
+                  (unsigned long)session->con.body_bytes_sent, (unsigned long long)latency_ms);
+    }
 
     const char *client_conn = get_header_value(&session->req.headers, "Connection");
     bool keep_alive = true;
