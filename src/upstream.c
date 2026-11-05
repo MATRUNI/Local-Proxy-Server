@@ -189,7 +189,7 @@ int sendHTTPRequest(struct proxy_connection *con, struct http_request *req, stru
     return conn_write_all(con, request, offset);
 }
 
-int receiveHTTPResponse(struct proxy_connection *con)
+int receiveHTTPResponse(struct proxy_connection *con, bool client_close)
 {
     int return_code = 1;
     char stack_buf[4096];
@@ -259,6 +259,16 @@ int receiveHTTPResponse(struct proxy_connection *con)
 
     if(content_length >= 0 && initial_body > (size_t)content_length)
         initial_body = (size_t)content_length;
+
+    if (client_close) {
+        char *conn_hdr = strcasestr(buffer, "\nconnection:");
+        if (conn_hdr != NULL && conn_hdr < headers_end) {
+            char *ka = strcasestr(conn_hdr, "keep-alive");
+            if (ka != NULL && ka < headers_end) {
+                memcpy(ka, "close     ", 10);
+            }
+        }
+    }
 
     size_t to_send = headers_len + initial_body;
     if (send_all(con->client_fd, buffer, to_send) == 1)

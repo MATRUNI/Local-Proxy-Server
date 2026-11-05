@@ -94,6 +94,9 @@ void session_free(struct client_session *session)
     conn_close(&session->con);
     if (session->con.client_fd >= 0)
     {
+        shutdown(session->con.client_fd,SHUT_WR);
+        char drain[256];
+        while (recv(session->con.client_fd, drain, sizeof(drain), MSG_DONTWAIT) > 0) {}
         close_socket(session->con.client_fd);
         session->con.client_fd = -1;
     }
@@ -258,6 +261,24 @@ int proxy_handle_client(struct client_session *session)
         send_client_error(client_fd, 400, "Invalid or missing target URL format\n");
         goto cleanup_req;
     }
+    if (strcmp(session->url.host, "127.0.0.1") == 0 ||
+        strcasecmp(session->url.host, "localhost") == 0 ||
+        strcmp(session->url.host, "0.0.0.0") == 0)
+    {
+        struct sockaddr_in local_addr;
+        socklen_t addr_len = sizeof(local_addr);
+        if (getsockname(client_fd, (struct sockaddr *)&local_addr, &addr_len) == 0)
+        {
+            int my_port = ntohs(local_addr.sin_port);
+            int target_port = atoi(session->url.port);
+            if (target_port == my_port)
+            {
+                write_log(LOG_WARN, "Recursive loop detected: target points to proxy port %d", my_port);
+                send_client_error(client_fd, 400, "Recursive proxy loop detected\n");
+                goto cleanup_url;
+            }
+        }
+    }
     bool in_progress = false;
     if(session->con.upstream_fd >= 0 && strcmp(session->upstream_host,session->url.host)==0 && strcmp(session->upstream_port,session->url.port)==0)
     {
@@ -325,24 +346,6 @@ int proxy_handle_client(struct client_session *session)
         }
     }
     
-    uint64_t start_ms = 0;
-    if (current_log_level <= LOG_INFO) {
-        start_ms = get_time_ms();
-    }
-
-    if (receiveHTTPResponse(&session->con) == 1)
-    {
-        send_client_error(client_fd, 502, "Target server closed connection without valid HTTP response\n");
-        goto cleanup_con;
-    }
-
-    if (current_log_level <= LOG_INFO) {
-        uint64_t latency_ms = get_time_ms() - start_ms;
-        write_log(LOG_INFO, "%s %s -> %d (%lu bytes) in %llu ms",
-                  session->req.method, session->url.host, session->con.status_code,
-                  (unsigned long)session->con.body_bytes_sent, (unsigned long long)latency_ms);
-    }
-
     const char *client_conn = get_header_value(&session->req.headers, "Connection");
     bool keep_alive = true;
     if (client_conn != NULL && strcasecmp(client_conn, "close") == 0)
@@ -356,6 +359,24 @@ int proxy_handle_client(struct client_session *session)
             keep_alive = false;
         }
     }
+    uint64_t start_ms = 0;
+    if (current_log_level <= LOG_INFO) {
+        start_ms = get_time_ms();
+    }
+
+    if (receiveHTTPResponse(&session->con,!keep_alive) == 1)
+    {
+        send_client_error(client_fd, 502, "Target server closed connection without valid HTTP response\n");
+        goto cleanup_con;
+    }
+
+    if (current_log_level <= LOG_INFO) {
+        uint64_t latency_ms = get_time_ms() - start_ms;
+        write_log(LOG_INFO, "%s %s -> %d (%lu bytes) in %llu ms",
+                  session->req.method, session->url.host, session->con.status_code,
+                  (unsigned long)session->con.body_bytes_sent, (unsigned long long)latency_ms);
+    }
+
     // Keep-alive is safe when response boundary is known (Content-Length or 204/304)
     if (keep_alive)
     {

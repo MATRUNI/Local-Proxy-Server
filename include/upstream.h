@@ -12,6 +12,6 @@ int stream_body(struct proxy_connection *con,bool to_client,char *buffer,size_t 
 
 int sendHTTPRequest(struct proxy_connection *con, struct http_request *req ,struct http_url *url);
 
-int receiveHTTPResponse(struct proxy_connection *con);
+int receiveHTTPResponse(struct proxy_connection *con, bool client_close);
 
 #endif
