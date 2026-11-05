@@ -4,12 +4,14 @@
 #if !defined(_WIN32)
 
 #include <pthread.h>
-
+#include <sys/stat.h>
+#define make_dir(p) mkdir(p, 0755)
 #else
 
 #include <windows.h>
 #include <process.h>
-
+#include <direct.h>
+#define make_dir(p) _mkdir(p)
 // 1. Thread types
 typedef HANDLE pthread_t;
 typedef int    pthread_attr_t;

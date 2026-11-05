@@ -307,8 +307,12 @@ int init_logger(char *log_file_dir, int log_file_count, size_t log_file_size)
     dir = opendir(log_dir);
     if(dir==NULL)
     {
-        printf("Failed to open directory.\n");
-        return 1;
+        make_dir(log_dir);
+        dir = opendir(log_dir);
+        if (dir == NULL) {
+            printf("Failed to create and open log directory.\n");
+            return 1;
+        }
     }
     last_active_file(dir,file_name,&current_file_size);
     if(file_name[0]=='\0')
