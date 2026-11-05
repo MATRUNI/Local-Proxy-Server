@@ -11,6 +11,7 @@ A lightweight, blazing-fast, and memory-efficient HTTP/HTTPS reverse proxy built
 - [Prerequisites & Build](#-prerequisites--build)
 - [CLI Usage & Flags](#-cli-usage--flags)
 - [Testing & Benchmarks](#-testing--benchmarks)
+  - [Automated 50,000+ Req/Sec Benchmark Suite](#0-automated-50000-reqsec-benchmark-suite-scriptsbenchmark_50ksh)
   - [Native C Multi-Threaded Stress Engine](#1-native-c-multi-threaded-stress-engine--m-stress)
   - [Master Webpage & CDN Test Suite](#2-master-webpage--cdn-test-suite-scriptstest_suitejs)
   - [High-Throughput Local Proxy Benchmark](#3-high-throughput-local-proxy-benchmark-scriptslocal_benchmarkjs)
@@ -142,24 +143,90 @@ The proxy uses the **Multi-Reactor Pattern with `SO_REUSEPORT`** (similar to mod
 
 ## 🛠 Prerequisites & Build
 
-### Prerequisites
-- **OS**: Linux (tested on Ubuntu / Debian x86_64)
-- **Compiler**: `gcc` (with C99 or GNU99 support)
-- **Libraries**: OpenSSL development headers (`libssl-dev`), POSIX Threads (`-pthread`)
-- **Testing**: `node` (v18+ for test suite) and `curl`
+The codebase is engineered to be **100% cross-platform**, multiplexing connections using the optimal kernel event engine for each operating system:
+- **Linux**: Multi-Reactor `epoll` (`EPOLLET` + `SO_REUSEPORT`)
+- **macOS / BSD**: Native `kqueue` (`EVFILT_READ` / `EVFILT_WRITE`)
+- **Windows**: `WSAPoll` (`Winsock2` non-blocking sockets)
 
-Install dependencies on Ubuntu/Debian:
+---
+
+### 🐧 Linux (Ubuntu / Debian / Fedora / Arch)
+
+#### Prerequisites
+- Compiler: `gcc` or `clang` (C99/GNU99)
+- Libraries: OpenSSL (`libssl-dev`), POSIX Threads (`-pthread`)
+
 ```bash
-sudo apt update
-sudo apt install -y build-essential libssl-dev
+# Ubuntu / Debian
+sudo apt update && sudo apt install -y build-essential libssl-dev
+
+# Fedora / RHEL
+sudo dnf install -y gcc openssl-devel
+
+# Arch Linux
+sudo pacman -S base-devel openssl
 ```
 
-### Compilation
-Compile the project with full optimization, link-time optimization (LTO), and strict warnings:
-
+#### Compilation
 ```bash
 gcc -O3 -flto -march=native -Wall -Wextra -Werror -Iinclude src/*.c -pthread -lssl -lcrypto -o build/api
 ```
+
+---
+
+### 🍏 macOS (Apple Silicon M1/M2/M3/M4 & Intel x86_64)
+
+On macOS, the proxy automatically selects **native BSD `kqueue`** (`src/poll_kqueue.c`). Because Apple does not ship OpenSSL in default compiler search paths, use Homebrew to install OpenSSL.
+
+#### Prerequisites
+```bash
+# 1. Install Xcode Command Line Tools (if not already installed)
+xcode-select --install
+
+# 2. Install OpenSSL via Homebrew
+brew install openssl@3
+```
+
+#### Compilation (Apple Clang / GCC)
+Point the compiler to Homebrew's OpenSSL headers and library paths using `$(brew --prefix openssl)`:
+
+```bash
+# Compile for macOS (auto-links native kqueue)
+clang -O3 -flto -Wall -Wextra -Werror \
+  -Iinclude \
+  -I$(brew --prefix openssl)/include \
+  -L$(brew --prefix openssl)/lib \
+  -pthread -lssl -lcrypto \
+  src/*.c -o build/api
+```
+
+*(Note: On Apple Silicon, Clang automatically targets ARM64; `-march=native` is omitted for seamless Apple Silicon & Intel Universal binary compilation).*
+
+---
+
+### 🪟 Windows (MSYS2 / MinGW-w64)
+
+On Windows, the proxy automatically selects **`WSAPoll`** (`src/poll_wsapoll.c`) and links against `ws2_32`.
+
+#### Prerequisites (MSYS2 MinGW 64-bit terminal)
+```bash
+pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-openssl
+```
+
+#### Compilation
+```bash
+gcc -O3 -flto -Wall -Wextra -Werror -Iinclude src/*.c -pthread -lssl -lcrypto -lws2_32 -o build/api.exe
+```
+
+---
+
+### 📦 Minimal Size Binary (Embedded / IoT Mode)
+For ultra-compact deployments (Raspberry Pi, OpenWrt, microVMs), compile with dead-code elimination and symbol stripping to generate a **47 KB standalone binary**:
+
+```bash
+gcc -Os -flto -march=native -ffunction-sections -fdata-sections -Wl,--gc-sections -s -Wall -Wextra -Werror -Iinclude src/*.c -pthread -lssl -lcrypto -o build/api
+```
+
 
 ---
 
@@ -215,6 +282,34 @@ Usage: ./api -p <port> -b <ip> -t <threads> -m <server|stress|logs|help> -l <deb
 ## 🧪 Testing & Benchmarks
 
 The proxy includes a comprehensive testing and benchmarking toolkit:
+
+### 0. Automated 50,000+ Req/Sec Benchmark Suite (`scripts/benchmark_50k.sh`)
+An all-in-one automated benchmark script that tests the ultimate throughput limits of the proxy. It launches a 4-worker clustered mock upstream server, spins up the 16-thread C Reverse Proxy, primes socket tables, and executes a 60,000-request native C stress test with automatic cleanup:
+
+```bash
+./scripts/benchmark_50k.sh
+```
+
+#### Peak Measured Results (60,000 Requests, 200 Concurrency, 8 Threads)
+```text
+=======================================================
+                  STRESS TEST RESULTS                  
+=======================================================
+  Target:             http://127.0.0.1:17777/?url=http://127.0.0.1:9099/
+  Method:             GET
+  Concurrency:        200 connections
+  Threads:            8 worker threads
+-------------------------------------------------------
+  Total Requests:     60000
+  Completed:          60002
+  Failed:             0
+  Duration:           1.187 seconds
+-------------------------------------------------------
+  🔥 Throughput:      50,565.15 req/sec
+=======================================================
+```
+
+---
 
 ### 1. Native C Multi-Threaded Stress Engine (`-m stress`)
 A built-in, zero-dependency, multi-threaded C benchmarking engine powered by non-blocking event loops (`epoll` on Linux, `kqueue` on macOS, `WSAPoll` on Windows). It eliminates Node.js client CPU bottlenecks and supports persistent HTTP/1.1 keep-alive, custom HTTP methods, custom payloads, and TLS/SNI.
