@@ -35,12 +35,17 @@ echo "       50,000+ REQ/SEC NATIVE PROXY BENCHMARK SUITE            "
 echo "===============================================================${C_RESET}"
 
 # 1. Ensure binary is compiled
-if [ ! -f "build/api" ]; then
-    echo "${C_YELLOW}[1/3] Binary not found. Compiling with -O3 -flto...${C_RESET}"
-    gcc -O3 -flto -march=native -Wall -Wextra -Werror -Iinclude src/*.c -pthread -lssl -lcrypto -o build/api
-else
-    echo "${C_GREEN}[1/3] Found production binary: ./build/api${C_RESET}"
+BIN="build/sankram"
+if [ ! -f "$BIN" ]; then
+    if [ -f "build/api" ]; then
+        BIN="build/api"
+    else
+        echo "${C_YELLOW}[1/3] Binary not found. Compiling with -O3 -flto...${C_RESET}"
+        gcc -O3 -flto -march=native -Wall -Wextra -Werror -Iinclude src/*.c -pthread -lssl -lcrypto -o build/sankram
+        BIN="build/sankram"
+    fi
 fi
+echo "${C_GREEN}[1/3] Found production binary: ./${BIN}${C_RESET}"
 
 # Ensure ports are clear
 fuser -k ${MOCK_PORT}/tcp ${PROXY_PORT}/tcp 2>/dev/null || true
@@ -90,8 +95,8 @@ MOCK_PORT=$MOCK_PORT node "$MOCK_SCRIPT" &
 MOCK_PID=$!
 
 # 3. Start C Proxy Server (16 threads, silent log mode)
-echo "${C_GREEN}[3/3] Starting C Reverse Proxy on port ${PROXY_PORT} (-t ${PROXY_THREADS} -l error)...${C_RESET}"
-./build/api -p ${PROXY_PORT} -l error -t ${PROXY_THREADS} > logs/benchmark_proxy.log 2>&1 &
+echo "${C_GREEN}[3/3] Starting Sankram Proxy on port ${PROXY_PORT} (-t ${PROXY_THREADS} -l error)...${C_RESET}"
+./$BIN -p ${PROXY_PORT} -l error -t ${PROXY_THREADS} > logs/benchmark_proxy.log 2>&1 &
 PROXY_PID=$!
 
 # Wait for both services to be ready
@@ -115,10 +120,10 @@ sleep 0.5
 # 4. Multi-Phase Warm-up & Peak Benchmark
 echo ""
 echo "${C_CYAN}[Phase 1/3] Priming upstream V8 JIT & connection pools...${C_RESET}"
-./build/api -m stress -u "http://127.0.0.1:${PROXY_PORT}/?url=http%3A%2F%2F127.0.0.1%3A${MOCK_PORT}%2F" -c ${CONCURRENCY} -n ${TOTAL_REQUESTS} -t ${STRESS_THREADS} >/dev/null 2>&1
+./$BIN -m stress -u "http://127.0.0.1:${PROXY_PORT}/?url=http%3A%2F%2F127.0.0.1%3A${MOCK_PORT}%2F" -c ${CONCURRENCY} -n ${TOTAL_REQUESTS} -t ${STRESS_THREADS} >/dev/null 2>&1
 
 echo "${C_CYAN}[Phase 2/3] Warming Linux socket tables & kernel cache lines...${C_RESET}"
-./build/api -m stress -u "http://127.0.0.1:${PROXY_PORT}/?url=http%3A%2F%2F127.0.0.1%3A${MOCK_PORT}%2F" -c ${CONCURRENCY} -n ${TOTAL_REQUESTS} -t ${STRESS_THREADS} >/dev/null 2>&1
+./$BIN -m stress -u "http://127.0.0.1:${PROXY_PORT}/?url=http%3A%2F%2F127.0.0.1%3A${MOCK_PORT}%2F" -c ${CONCURRENCY} -n ${TOTAL_REQUESTS} -t ${STRESS_THREADS} >/dev/null 2>&1
 
 echo ""
 echo "${C_BOLD}${C_GREEN}🚀 [Phase 3/3] Executing Peak 50,000+ Req/Sec Stress Benchmark...${C_RESET}"
@@ -128,7 +133,7 @@ echo "Concurrency  : ${CONCURRENCY} connections"
 echo "Client Fleet : ${STRESS_THREADS} threads"
 echo ""
 
-./build/api -m stress \
+./$BIN -m stress \
   -u "http://127.0.0.1:${PROXY_PORT}/?url=http%3A%2F%2F127.0.0.1%3A${MOCK_PORT}%2F" \
   -c ${CONCURRENCY} \
   -n ${TOTAL_REQUESTS} \

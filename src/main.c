@@ -273,7 +273,7 @@ int main(int argc, char *argv[])
             break;
 
         case MODE_HELP:
-            printf("Usage: ./api -p <port> -b <ip> -t <threads> -m <server|stress|logs> -l <debug|info|warn|error> -v\n");
+            printf("Usage: ./sankram -p <port> -b <ip> -t <threads> -m <server|stress|logs> -l <debug|info|warn|error> -v\n");
             break;
 
         case MODE_STRESS:
