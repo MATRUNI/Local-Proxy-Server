@@ -18,6 +18,70 @@
 
 #define MAX_HEADER_SIZE (65536)
 
+static int upstream_pool_get(struct upstream_pool *pool, const char *host, const char *port, int *fd, void **upstream_ssl,ssize_t (**read_fn)(struct proxy_connection *, void *, size_t),ssize_t (**write_fn)(struct proxy_connection *, void *, size_t))
+{
+    if (pool == NULL || pool->count < 0 || pool->count > UPSTREAM_POOL_MAX) 
+    {
+        if (pool != NULL) pool->count = 0;
+        return 1;
+    }
+    for(int i=0;i<pool->count;i++)
+    {
+        if(pool->entries[i].host[0]== host[0] && pool->entries[i].port[0] == port[0])
+        {
+            if(strcmp(pool->entries[i].host, host)==0 && strcmp(pool->entries[i].port,port)==0)
+            {
+                char peek;
+                int r = recv(pool->entries[i].upstream_fd, &peek, 1, MSG_PEEK | MSG_DONTWAIT);
+                if(r==0 || (r<0 && socket_errno != EAGAIN_COMPAT && socket_errno != EWOULDBLOCK_COMPAT))
+                {
+                    close_socket(pool->entries[i].upstream_fd);
+                    pool->entries[i] = pool->entries[pool->count-1];
+                    pool->count--;
+                    i--;
+                    continue;
+                }
+                *fd = pool->entries[i].upstream_fd;
+                if(upstream_ssl!=NULL)
+                    *upstream_ssl = pool->entries[i].upstream_ssl;
+                *read_fn = pool->entries[i].read;
+                *write_fn = pool->entries[i].write;
+                pool->entries[i] = pool->entries[pool->count-1];
+                pool->count--;
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+static void upstream_pool_put(struct upstream_pool *pool, const char *host, const char *port, int fd, void *upstream_ssl,ssize_t (*read_fn)(struct proxy_connection *, void *, size_t),ssize_t (*write_fn)(struct proxy_connection *, void *, size_t))
+{
+    if (pool == NULL || fd < 0 || host == NULL || port == NULL) return;
+    if (pool->count < 0 || pool->count > UPSTREAM_POOL_MAX) {
+        if (pool != NULL) pool->count = 0;
+        return;
+    }
+    int idx;
+    if (pool->count < UPSTREAM_POOL_MAX)
+    {
+        idx = pool->count++;
+    }
+    else
+    {
+        close_socket(pool->entries[0].upstream_fd);
+        idx = 0;
+    }
+
+    strncpy(pool->entries[idx].host, host, sizeof(pool->entries[idx].host) - 1);
+    strncpy(pool->entries[idx].port, port, sizeof(pool->entries[idx].port) - 1);
+    pool->entries[idx].upstream_fd = fd;
+    pool->entries[idx].upstream_ssl = upstream_ssl;
+    pool->entries[idx].last_used_ms = get_time_ms();
+    pool->entries[idx].read = read_fn;
+    pool->entries[idx].write = (ssize_t (*)(struct proxy_connection *, void *, size_t))write_fn;
+}
+
 struct client_session *session_create(int client_fd,struct poll_engine *engine)
 {
     struct client_session *session = malloc(sizeof(struct client_session));
@@ -91,6 +155,13 @@ void session_free(struct client_session *session)
     }
     free_url(&session->url);
     free_request(&session->req);
+    if (session->con.upstream_fd >= 0 && session->pool != NULL && session->upstream_host[0] != '\0')
+    {
+        upstream_pool_put(session->pool, session->upstream_host, session->upstream_port,
+                          session->con.upstream_fd, session->con.upstream_ssl,session->con.read,session->con.write);
+        session->con.upstream_fd = -1;      // So conn_close() won't close it
+        session->con.upstream_ssl = NULL;
+    }
     conn_close(&session->con);
     if (session->con.client_fd >= 0)
     {
@@ -284,6 +355,18 @@ int proxy_handle_client(struct client_session *session)
     {
         goto MAKE_CALL;
     }
+
+    if (session->con.upstream_fd < 0 && session->pool != NULL)
+    {
+        if (upstream_pool_get(session->pool, session->url.host, session->url.port,
+                              &session->con.upstream_fd, &session->con.upstream_ssl,&session->con.read,&session->con.write) == 0)
+        {
+            strncpy(session->upstream_host, session->url.host, sizeof(session->upstream_host) - 1);
+            strncpy(session->upstream_port, session->url.port, sizeof(session->upstream_port) - 1);
+            session->upstream_is_https = (strcasecmp(session->url.schema, "https") == 0);
+            goto MAKE_CALL; // Jump straight to sending! Zero DNS, Zero TCP handshake!
+        }
+    }
     int server_fd = make_api_call(session->url.host,session->url.port, &in_progress);
     if(server_fd==-1)
     {
@@ -384,6 +467,7 @@ int proxy_handle_client(struct client_session *session)
         return PROXY_AGAIN;
     }
     res = PROXY_DONE;
+    goto cleanup_url;
     cleanup_con:
     conn_close(&session->con);
     cleanup_url:

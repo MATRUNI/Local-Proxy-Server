@@ -6,12 +6,14 @@
 CC ?= gcc
 TARGET = build/sankram
 DEBUG_TARGET = build/sankram_debug
+SMALL_TARGET = build/sankram_small
 
 # Source, Header and Object files
 SRCS = $(wildcard src/*.c)
 HEADERS = $(wildcard include/*.h)
 OBJS = $(patsubst src/%.c, build/obj/%.o, $(SRCS))
 DEBUG_OBJS = $(patsubst src/%.c, build/obj_debug/%.o, $(SRCS))
+SMALL_OBJS = $(patsubst src/%.c, build/obj_small/%.o, $(SRCS))
 
 # Header includes
 INCLUDES = -Iinclude
@@ -20,6 +22,7 @@ INCLUDES = -Iinclude
 BASE_CFLAGS = -Wall -Wextra -Werror -std=gnu11 $(INCLUDES)
 CFLAGS ?= -O3 -flto -march=native $(BASE_CFLAGS)
 DEBUG_CFLAGS = -g -O0 -fsanitize=address,undefined $(BASE_CFLAGS)
+SMALL_CFLAGS = -Os -flto -march=native -ffunction-sections -fdata-sections $(BASE_CFLAGS)
 
 # Platform detection
 UNAME_S := $(shell uname -s 2>/dev/null || echo Windows)
@@ -77,6 +80,21 @@ build/obj_debug/%.o: src/%.c $(HEADERS)
 	@echo "  [CC]   $< (debug)"
 	@$(CC) $(DEBUG_CFLAGS) -c $< -o $@
 
+# Compact/Embedded size-optimized build (-Os + dead-code elimination + strip)
+.PHONY: small
+small: $(SMALL_TARGET)
+
+$(SMALL_TARGET): $(SMALL_OBJS)
+	@mkdir -p build logs
+	@echo "  [LD]   $@ (size-optimized & stripped)"
+	@$(CC) $(SMALL_CFLAGS) $(SMALL_OBJS) $(LDFLAGS) -Wl,--gc-sections -s -o $@
+	@echo "✔ Compact build complete: $@"
+
+build/obj_small/%.o: src/%.c $(HEADERS)
+	@mkdir -p build/obj_small
+	@echo "  [CC]   $< (compact)"
+	@$(CC) $(SMALL_CFLAGS) -c $< -o $@
+
 # Run server
 .PHONY: run
 run: $(TARGET)
@@ -93,7 +111,7 @@ test: $(TARGET)
 .PHONY: clean
 clean:
 	@echo "Cleaning build artifacts..."
-	@rm -rf build/obj build/obj_debug $(TARGET) $(DEBUG_TARGET)
+	@rm -rf build/obj build/obj_debug build/obj_small $(TARGET) $(DEBUG_TARGET) $(SMALL_TARGET)
 	@echo "✔ Clean done."
 
 # Global system install

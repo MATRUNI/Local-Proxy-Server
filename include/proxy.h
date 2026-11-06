@@ -1,5 +1,6 @@
 #ifndef PROXY_H
 #define PROXY_H
+#include <stdint.h>
 #include "config.h"
 #include "http.h"
 #include "url.h"
@@ -8,6 +9,9 @@
 #define PROXY_DONE   0   // Request completed successfully
 #define PROXY_ERROR  1   // Error occurred or client disconnected
 #define PROXY_AGAIN  2   // Partial request (EAGAIN); keep session alive!
+
+#define UPSTREAM_POOL_MAX 64
+#define UPSTREAM_IDLE_TIMEOUT_MS 10000  // 10 seconds
 
 struct proxy_connection
 {
@@ -18,6 +22,21 @@ struct proxy_connection
     size_t body_bytes_sent;
     ssize_t (*read)(struct proxy_connection *conn, void *buf, size_t len);
     ssize_t (*write)(struct proxy_connection *conn, void *buf, size_t len);
+};
+
+struct upstream_pool_entry {
+    char host[256];
+    char port[16];
+    int upstream_fd;
+    void *upstream_ssl;
+    ssize_t (*read)(struct proxy_connection *conn, void *buf, size_t len);
+    ssize_t (*write)(struct proxy_connection *conn, void *buf, size_t len); 
+    uint64_t last_used_ms;
+};
+
+struct upstream_pool {
+    struct upstream_pool_entry entries[UPSTREAM_POOL_MAX];
+    int count;
 };
 
 typedef enum {
@@ -46,6 +65,7 @@ struct client_session {
     char upstream_port[16];
     bool upstream_is_https;
     char initial_buffer[4096];
+    struct upstream_pool *pool;
 };
 
 

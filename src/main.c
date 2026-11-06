@@ -20,6 +20,7 @@ struct worker_context {
     struct poll_engine *engine;
     int listen_fd;
     pthread_t thread;
+    struct upstream_pool pool;
 };
 
 #define MAX_EVENTS 64
@@ -67,11 +68,12 @@ static void *proxy_thread_worker(void *arg)
 
                     set_socket_nodelay(client_fd);
                     struct client_session *ses = session_create(client_fd,self->engine);
-                    if(ses==NULL)
+                    if (ses == NULL)
                     {
                         close_socket(client_fd);
                         continue;
                     }
+                    ses->pool = &self->pool;
                     self->engine->add(self->engine,client_fd,ENGINE_READ | ENGINE_ONESHOT,ses);
                 }
             }
@@ -185,7 +187,7 @@ static int run_server(const struct proxy_config *config)
         sigaction(SIGTERM, &sa, NULL);
     #endif
     get_worker_thread_attr();
-    struct worker_context *workers = malloc(sizeof(struct worker_context) * config->threads);
+    struct worker_context *workers = calloc(config->threads,sizeof(struct worker_context));
     if(spawn_worker_fleet(workers,(int)config->threads,config->port,config->listen_ip,config->timeout)==1)
     {
         put_to_sleep();
