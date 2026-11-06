@@ -184,7 +184,7 @@ int parse_config(int argc, char **argv, struct proxy_config *config)
         {
             const char *template =
                 "# ==============================================================================\n"
-                "# Local-Proxy-Server Configuration File\n"
+                "# Sankram Configuration File\n"
                 "# Auto-generated via --spawn-config\n"
                 "# ==============================================================================\n\n"
                 "# --- [Network Settings] ---\n"

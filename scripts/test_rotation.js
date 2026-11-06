@@ -72,8 +72,9 @@ mockServer.listen(MOCK_PORT, '127.0.0.1', async () => {
   });
 
   // 2. Start Proxy
-  console.log('\nStarting Proxy Server (./build/api -p 17777)...');
-  const proxy = spawn('./build/api', ['-p', String(PROXY_PORT)], {
+  const binPath = fs.existsSync('./build/sankram') ? './build/sankram' : './build/api';
+  console.log(`\nStarting Proxy Server (${binPath} -p ${PROXY_PORT})...`);
+  const proxy = spawn(binPath, ['-p', String(PROXY_PORT)], {
     stdio: ['ignore', 'inherit', 'inherit']
   });
 

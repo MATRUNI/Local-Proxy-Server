@@ -1,3 +1,3 @@
 #!/bin/bash
 echo "Stopping proxy server..."
-pkill -SIGINT api || echo "Server is not running."
+pkill -SIGINT sankram || pkill -SIGINT api || echo "Server is not running."

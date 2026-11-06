@@ -179,10 +179,22 @@ sudo dnf install -y gcc openssl-devel
 sudo pacman -S base-devel openssl
 ```
 
-#### Compilation
+#### Quick Build with Make (Recommended)
+```bash
+make -j$(nproc)
+```
+
+#### Manual Compilation
 ```bash
 gcc -O3 -flto -march=native -Wall -Wextra -Werror -Iinclude src/*.c -pthread -lssl -lcrypto -o build/sankram
 ```
+
+#### Build Targets & Shortcuts
+- `make` — Compiles optimized production binary (`build/sankram`).
+- `make debug` — Builds with AddressSanitizer and UndefinedBehaviorSanitizer (`build/sankram_debug`).
+- `make test` — Verifies binary build and sanity check.
+- `make clean` — Cleans all build artifacts and intermediate `.o` files.
+- `sudo make install` — Installs `sankram` to `/usr/local/bin/`.
 
 ---
 

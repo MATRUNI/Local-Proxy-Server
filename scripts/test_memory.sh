@@ -6,19 +6,20 @@ CONCURRENT_CLIENTS=30
 REQUESTS_PER_CLIENT=2
 
 mkdir -p logs
-echo "=== Memory Benchmark Session $(date) ===" > logs/api.log
+echo "=== Memory Benchmark Session $(date) ===" > logs/sankram.log
 
-echo "==========================================================" | tee -a logs/api.log
-echo "     PROXY CONCURRENCY & MEMORY BENCHMARK TOOL            " | tee -a logs/api.log
-echo "==========================================================" | tee -a logs/api.log
+echo "==========================================================" | tee -a logs/sankram.log
+echo "     PROXY CONCURRENCY & MEMORY BENCHMARK TOOL            " | tee -a logs/sankram.log
+echo "==========================================================" | tee -a logs/sankram.log
 
 # 1. Compile
-echo "[1/4] Compiling latest binary..." | tee -a logs/api.log
-gcc -Wall -Wextra -Iinclude src/*.c -pthread -lssl -lcrypto -o build/api
+echo "[1/4] Compiling latest binary..." | tee -a logs/sankram.log
+make clean >/dev/null 2>&1 || true
+make -j$(nproc) >/dev/null 2>&1
 
-# 2. Start server directing output to logs/api.log
-echo "[2/4] Launching proxy server on port $PORT..." | tee -a logs/api.log
-./build/api -p $PORT >> logs/api.log 2>&1 &
+# 2. Start server directing output to logs/sankram.log
+echo "[2/4] Launching proxy server on port $PORT..." | tee -a logs/sankram.log
+./build/sankram -p $PORT >> logs/sankram.log 2>&1 &
 PROXY_PID=$!
 
 cleanup() {
@@ -30,7 +31,7 @@ trap cleanup EXIT INT TERM
 
 sleep 0.5
 if ! kill -0 $PROXY_PID 2>/dev/null; then
-    echo "ERROR: Server failed to start!" | tee -a logs/api.log
+    echo "ERROR: Server failed to start!" | tee -a logs/sankram.log
     exit 1
 fi
 
@@ -43,10 +44,10 @@ BASE_VMRSS=$(get_stat "VmRSS:")
 BASE_VMHWM=$(get_stat "VmHWM:")
 BASE_THREADS=$(get_stat "Threads:")
 
-echo "  -> Baseline VmRSS (Current RAM):  ${BASE_VMRSS} kB (~$(( BASE_VMRSS / 1024 )) MB)" | tee -a logs/api.log
-echo "  -> Baseline VmHWM (High Water):   ${BASE_VMHWM} kB (~$(( BASE_VMHWM / 1024 )) MB)" | tee -a logs/api.log
-echo "  -> Baseline Virtual Memory:       ${BASE_VMSIZE} kB" | tee -a logs/api.log
-echo "  -> Baseline Threads:              ${BASE_THREADS}" | tee -a logs/api.log
+echo "  -> Baseline VmRSS (Current RAM):  ${BASE_VMRSS} kB (~$(( BASE_VMRSS / 1024 )) MB)" | tee -a logs/sankram.log
+echo "  -> Baseline VmHWM (High Water):   ${BASE_VMHWM} kB (~$(( BASE_VMHWM / 1024 )) MB)" | tee -a logs/sankram.log
+echo "  -> Baseline Virtual Memory:       ${BASE_VMSIZE} kB" | tee -a logs/sankram.log
+echo "  -> Baseline Threads:              ${BASE_THREADS}" | tee -a logs/sankram.log
 
 rm -f /tmp/proxy_mem_samples.log /tmp/proxy_results.log /tmp/proxy_latencies.log
 touch /tmp/proxy_mem_samples.log /tmp/proxy_results.log /tmp/proxy_latencies.log
@@ -63,7 +64,7 @@ touch /tmp/proxy_mem_samples.log /tmp/proxy_results.log /tmp/proxy_latencies.log
 ) &
 MONITOR_PID=$!
 
-echo -e "\n[3/4] Firing $CONCURRENT_CLIENTS concurrent workers (streaming 100KB HTTPS files)..." | tee -a logs/api.log
+echo -e "\n[3/4] Firing $CONCURRENT_CLIENTS concurrent workers (streaming 100KB HTTPS files)..." | tee -a logs/sankram.log
 TOTAL_REQS=$(( CONCURRENT_CLIENTS * REQUESTS_PER_CLIENT ))
 
 START_TIME=$(date +%s%N)
@@ -97,7 +98,7 @@ DURATION_NS=$(( END_TIME - START_TIME ))
 DURATION_MS=$(( DURATION_NS / 1000000 ))
 DURATION_S=$(awk "BEGIN {print $DURATION_MS / 1000}")
 
-echo "[4/4] Load finished. Waiting 1 second for cooldown and thread cleanup..." | tee -a logs/api.log
+echo "[4/4] Load finished. Waiting 1 second for cooldown and thread cleanup..." | tee -a logs/sankram.log
 sleep 1
 
 POST_VMRSS=$(get_stat "VmRSS:")
@@ -159,4 +160,4 @@ echo "----------------------------------------------------------"
 echo "Cooldown VmRSS (After Load):  ${POST_VMRSS} kB"
 echo "Active Threads After Load:    ${POST_THREADS} (should be 2: listener + logger)"
 echo "=========================================================="
-} | tee -a logs/api.log
+} | tee -a logs/sankram.log

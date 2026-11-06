@@ -24,17 +24,17 @@ $srcFiles = @(
     "src/poll_wsapoll.c"
 )
 
-gcc -Wall -Wextra -Iinclude $srcFiles -lws2_32 -lsecur32 -lcrypt32 -o build/api.exe
+gcc -Wall -Wextra -Iinclude $srcFiles -lws2_32 -lsecur32 -lcrypt32 -o build/sankram.exe
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[ERROR] Compilation failed!" -ForegroundColor Red
     exit 1
 }
-Write-Host "[OK] build/api.exe successfully created!" -ForegroundColor Green
+Write-Host "[OK] build/sankram.exe successfully created!" -ForegroundColor Green
 
 # 3. Launch background process
 Write-Host "[2/3] Starting background server on port 17777..." -ForegroundColor Yellow
-$proc = Start-Process -FilePath "build\api.exe" -ArgumentList "-p 17777" -PassThru -NoNewWindow
+$proc = Start-Process -FilePath "build\sankram.exe" -ArgumentList "-p 17777" -PassThru -NoNewWindow
 Start-Sleep -Milliseconds 800
 
 try {
