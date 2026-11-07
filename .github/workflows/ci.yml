@@ -1,0 +1,220 @@
+name: CI
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+
+jobs:
+  linux:
+    name: Ubuntu Linux (epoll)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev build-essential
+
+      - name: Build standard binary (make)
+        run: make -j$(nproc)
+
+      - name: Build compact binary (make small)
+        run: make small -j$(nproc)
+
+      - name: Run verification test
+        run: make test
+
+      - name: Check binary sizes and info
+        run: |
+          ls -lh build/sankram build/sankram_small
+          size build/sankram build/sankram_small
+
+      - name: Run Real-World Integration Test Suite
+        run: |
+          ./build/sankram -p 17777 -l error -t 4 &
+          PROXY_PID=$!
+          sleep 1
+          node scripts/test_suite.js
+          kill -SIGINT $PROXY_PID 2>/dev/null || true
+
+      - name: Run Carousel Log Rotation Test Suite
+        run: |
+          rm -rf logs && mkdir -p logs
+          node scripts/test_rotation.js
+
+      - name: Run CI Benchmark & Publish Summary
+        run: |
+          mkdir -p logs
+          # Benchmark standard (-O3) binary
+          echo "Running standard (-O3) benchmark..."
+          OUTPUT_STD=$(SANKRAM_BIN=build/sankram ./scripts/benchmark_50k.sh 20000 50)
+          echo "$OUTPUT_STD"
+          RPS_STD=$(echo "$OUTPUT_STD" | grep "Throughput:" | grep -oE '[0-9]+\.[0-9]+' | head -n1)
+          SIZE_STD=$(ls -lh build/sankram | awk '{print $5}')
+
+          # Benchmark compact (-Os) binary
+          echo "Running compact (-Os) benchmark..."
+          OUTPUT_OPT=$(SANKRAM_BIN=build/sankram_small ./scripts/benchmark_50k.sh 20000 50)
+          echo "$OUTPUT_OPT"
+          RPS_OPT=$(echo "$OUTPUT_OPT" | grep "Throughput:" | grep -oE '[0-9]+\.[0-9]+' | head -n1)
+          SIZE_OPT=$(ls -lh build/sankram_small | awk '{print $5}')
+
+          # Publish Markdown Table to GitHub Step Summary
+          echo "## 🐧 Linux (epoll) Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Target | Engine | Binary Size | Throughput (20k reqs) | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Standard (-O3)** | \`epoll\` | \`$SIZE_STD\` | **$RPS_STD req/s** | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Compact (-Os)** | \`epoll\` | \`$SIZE_OPT\` | **$RPS_OPT req/s** | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+
+  macos:
+    name: macOS (kqueue)
+    runs-on: macos-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Ensure OpenSSL is linked
+        run: brew install openssl@3 2>/dev/null || true
+
+      - name: Build on macOS
+        run: make -j$(sysctl -n hw.ncpu)
+
+      - name: Run verification test
+        run: make test
+
+      - name: Check binary size
+        run: ls -lh build/sankram
+
+      - name: Run Real-World Integration Test Suite
+        run: |
+          ./build/sankram -p 17777 -l error -t 4 &
+          PROXY_PID=$!
+          sleep 1
+          node scripts/test_suite.js
+          kill -SIGINT $PROXY_PID 2>/dev/null || true
+
+      - name: Run Carousel Log Rotation Test Suite
+        run: |
+          rm -rf logs && mkdir -p logs
+          node scripts/test_rotation.js
+
+      - name: Run CI Benchmark & Publish Summary
+        run: |
+          mkdir -p logs
+          echo "Running macOS (kqueue) benchmark..."
+          OUTPUT=$(SANKRAM_BIN=build/sankram ./scripts/benchmark_50k.sh 20000 50)
+          echo "$OUTPUT"
+          RPS=$(echo "$OUTPUT" | grep "Throughput:" | grep -oE '[0-9]+\.[0-9]+' | head -n1)
+          SIZE=$(ls -lh build/sankram | awk '{print $5}')
+
+          echo "## 🍏 macOS (kqueue) Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| OS Platform | Engine | Binary Size | Throughput (20k reqs) | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **macOS** | \`kqueue\` | \`$SIZE\` | **$RPS req/s** | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+
+  windows:
+    name: Windows (WSAPoll & Schannel)
+    runs-on: windows-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Setup MinGW MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-openssl make
+
+      - name: Build Windows binary with GCC
+        shell: msys2 {0}
+        run: |
+          mkdir -p build logs
+          # Production build with LTO and stripped symbols
+          gcc -O3 -flto -s -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-ident \
+            -ffunction-sections -fdata-sections -Wl,--gc-sections \
+            -Wall -Wextra -Werror -std=gnu11 -Iinclude \
+            src/config.c src/http.c src/http_error.c src/logger.c src/main.c \
+            src/proxy.c src/server.c src/stress.c src/tls_schannel.c src/upstream.c src/url.c \
+            src/poll_wsapoll.c \
+            -lws2_32 -lsecur32 -lcrypt32 -o build/sankram.exe
+          strip --strip-all build/sankram.exe
+
+          # Compact build with size optimization (-Os)
+          gcc -Os -flto -s -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-ident \
+            -ffunction-sections -fdata-sections -Wl,--gc-sections \
+            -Wall -Wextra -Werror -std=gnu11 -Iinclude \
+            src/config.c src/http.c src/http_error.c src/logger.c src/main.c \
+            src/proxy.c src/server.c src/stress.c src/tls_schannel.c src/upstream.c src/url.c \
+            src/poll_wsapoll.c \
+            -lws2_32 -lsecur32 -lcrypt32 -o build/sankram_small.exe
+          strip --strip-all build/sankram_small.exe
+
+      - name: Verify Windows executable
+        shell: pwsh
+        run: |
+          ./build/sankram.exe -h
+          ./build/sankram_small.exe -h
+          Get-ChildItem build/*.exe | Select-Object Name, @{Name="Size(KB)";Expression={[math]::Round($_.Length/1KB, 1)}}
+
+      - name: Run Real-World Integration Test Suite
+        shell: pwsh
+        run: |
+          $proc = Start-Process -FilePath ".\build\sankram.exe" -ArgumentList "-p 17777 -l error -t 4" -PassThru
+          Start-Sleep -Seconds 2
+          try {
+            node scripts/test_suite.js
+          } finally {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Run Carousel Log Rotation Test Suite
+        shell: pwsh
+        run: |
+          if (Test-Path logs) { Remove-Item -Recurse -Force logs }
+          New-Item -ItemType Directory -Path logs | Out-Null
+          node scripts/test_rotation.js
+
+      - name: Run CI Benchmark & Publish Summary
+        shell: pwsh
+        run: |
+          # 1. Start Node.js mock upstream server
+          $mockProc = Start-Process -FilePath "node" -ArgumentList "scripts/mock_upstream.js" -PassThru
+
+          # 2. Start Sankram proxy
+          $proxyProc = Start-Process -FilePath ".\build\sankram.exe" -ArgumentList "-p 17777 -l error -t 8" -PassThru
+          Start-Sleep -Seconds 2
+
+          try {
+            # 3. Warm-up run (5,000 reqs)
+            .\build\sankram.exe -m stress -u "http://127.0.0.1:17777/?url=http%3A%2F%2F127.0.0.1%3A9099%2F" -c 50 -n 5000 -t 4 | Out-Null
+
+            # 4. Benchmark run (20,000 reqs)
+            $benchOut = .\build\sankram.exe -m stress -u "http://127.0.0.1:17777/?url=http%3A%2F%2F127.0.0.1%3A9099%2F" -c 50 -n 20000 -t 4 | Out-String
+            Write-Host $benchOut
+
+            # 5. Extract throughput and file size
+            $rps = "N/A"
+            if ($benchOut -match "Throughput:.*?([0-9]+\.[0-9]+)") {
+              $rps = $Matches[1]
+            }
+            $sizeStd = (Get-Item "build\sankram.exe").Length / 1KB
+            $sizeOpt = (Get-Item "build\sankram_small.exe").Length / 1KB
+
+            # 6. Append to GitHub Step Summary
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## 🪟 Windows (WSAPoll & Schannel) Benchmark Results"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| Build Target | Engine | Binary Size | Throughput (20k reqs) | Status |"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "|---|---|---|---|---|"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| **Standard (-O3)** | WSAPoll | $([math]::Round($sizeStd, 1)) KB | **$rps req/s** | ✅ Passed |"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| **Compact (-Os)** | WSAPoll | $([math]::Round($sizeOpt, 1)) KB | — | ✅ Passed |"
+          } finally {
+            Stop-Process -Id $proxyProc.Id -Force -ErrorAction SilentlyContinue
+            Stop-Process -Id $mockProc.Id -Force -ErrorAction SilentlyContinue
+          }

@@ -28,6 +28,31 @@
     #define EINPROGRESS_COMPAT WSAEWOULDBLOCK
     #define ECONNRESET_COMPAT WSAECONNRESET
     #define EPIPE_COMPAT      WSAECONNABORTED
+    #ifndef SHUT_WR
+        #define SHUT_WR SD_SEND
+    #endif
+    #ifndef MSG_DONTWAIT
+        #define MSG_DONTWAIT 0
+    #endif
+    #include <ctype.h>
+    static inline char *compat_strcasestr(const char *haystack, const char *needle) {
+        if (!*needle) return (char *)haystack;
+        for (; *haystack; haystack++) {
+            if (tolower((unsigned char)*haystack) == tolower((unsigned char)*needle)) {
+                const char *h = haystack;
+                const char *n = needle;
+                while (*h && *n && tolower((unsigned char)*h) == tolower((unsigned char)*n)) {
+                    h++;
+                    n++;
+                }
+                if (!*n) return (char *)haystack;
+            }
+        }
+        return NULL;
+    }
+    #ifndef strcasestr
+        #define strcasestr compat_strcasestr
+    #endif
 #else
     #include <sys/socket.h>
     #include <arpa/inet.h>

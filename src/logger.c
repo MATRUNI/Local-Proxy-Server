@@ -11,6 +11,7 @@
     #include <unistd.h>
     #include <sys/syscall.h>
 #elif defined(__APPLE__)
+    #include <unistd.h> 
     #include <pthread.h>
 #elif defined(_WIN32)
     #include <windows.h>
@@ -25,7 +26,7 @@
 
 static uint64_t get_thread_id(void)
 {
-    #if defined(_WIN32)
+    #if defined(_MSC_VER)
         static __declspec(thread) uint64_t cached_tid = 0;
     #else
         static __thread uint64_t cached_tid = 0;
@@ -366,21 +367,24 @@ int write_log(log_level_t level,const char *line,...)
     if(level<0 || level>3)
         level = 1;
     int return_value = 1;
-    struct timespec ts;
-    struct tm tm;
-    char timestamp[32];
-    timespec_get(&ts, TIME_UTC);
-
+    char timestamp[64];
+    long millis = 0;
     #if defined(_WIN32)
-        time_t sec = (time_t)ts.tv_sec;
-        localtime_s(&tm, &sec);
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        snprintf(timestamp, sizeof(timestamp), "%04d-%02d-%02d %02d:%02d:%02d",
+                 st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+        millis = st.wMilliseconds;
     #else
+        struct timespec ts;
+        struct tm tm;
+        timespec_get(&ts, TIME_UTC);
         if (localtime_r(&ts.tv_sec, &tm) == NULL)
             return return_value;
+        if (strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &tm) == 0)
+            return return_value;
+        millis = ts.tv_nsec / 1000000;
     #endif
-    
-    if (strftime(timestamp, sizeof(timestamp),"%Y-%m-%d %H:%M:%S", &tm) == 0)
-        return return_value;
 
     va_list args;
     uint64_t tid = get_thread_id();
@@ -388,7 +392,7 @@ int write_log(log_level_t level,const char *line,...)
     char msg[1024];
     int len = 0;
     
-    len = snprintf(msg,sizeof(msg),"[%s.%03ld] [TID:%llu] [%s] ",timestamp,ts.tv_nsec/1000000,(unsigned long long)tid,log_value[level]);
+    len = snprintf(msg, sizeof(msg), "[%s.%03ld] [TID:%llu] [%s] ", timestamp, millis, (unsigned long long)tid, log_value[level]);
     
     if(len<0)
     {

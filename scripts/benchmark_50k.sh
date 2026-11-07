@@ -35,7 +35,7 @@ echo "       50,000+ REQ/SEC NATIVE PROXY BENCHMARK SUITE            "
 echo "===============================================================${C_RESET}"
 
 # 1. Ensure binary is compiled
-BIN="build/sankram"
+BIN="${SANKRAM_BIN:-build/sankram}"
 if [ ! -f "$BIN" ]; then
     if [ -f "build/api" ]; then
         BIN="build/api"
@@ -47,8 +47,18 @@ if [ ! -f "$BIN" ]; then
 fi
 echo "${C_GREEN}[1/3] Found production binary: ./${BIN}${C_RESET}"
 
+kill_port() {
+    local p=$1
+    if command -v fuser >/dev/null 2>&1; then
+        fuser -k "${p}/tcp" 2>/dev/null || true
+    elif command -v lsof >/dev/null 2>&1; then
+        lsof -ti ":${p}" | xargs kill -9 2>/dev/null || true
+    fi
+}
+
 # Ensure ports are clear
-fuser -k ${MOCK_PORT}/tcp ${PROXY_PORT}/tcp 2>/dev/null || true
+kill_port ${MOCK_PORT}
+kill_port ${PROXY_PORT}
 sleep 0.2
 
 # Cleanup handler
@@ -63,7 +73,8 @@ cleanup() {
         pkill -P "$MOCK_PID" 2>/dev/null || true
     fi
     rm -f "$MOCK_SCRIPT"
-    fuser -k ${MOCK_PORT}/tcp ${PROXY_PORT}/tcp 2>/dev/null || true
+    kill_port ${MOCK_PORT}
+    kill_port ${PROXY_PORT}
 }
 trap cleanup EXIT INT TERM
 

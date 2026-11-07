@@ -169,7 +169,7 @@ async function main() {
 
   const burstTargets = [
     { url: 'https://www.google.com/', name: 'Google' },
-    { url: 'https://news.ycombinator.com/', name: 'HackerNews' },
+    { url: 'https://httpbin.org/get', name: 'HttpBin' },
     { url: 'http://example.com/', name: 'Example.com' },
     { url: 'https://jsonplaceholder.typicode.com/posts/1', name: 'JSONPlaceholder' },
   ];

@@ -33,7 +33,10 @@ typedef CONDITION_VARIABLE pthread_cond_t;
 static inline int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_routine)(void *), void *arg)
 {
     (void)attr;
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wcast-function-type"
     *thread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)start_routine, arg, 0, NULL);
+    #pragma GCC diagnostic pop
     return (*thread == NULL) ? -1 : 0;
 }
 

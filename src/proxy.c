@@ -73,8 +73,8 @@ static void upstream_pool_put(struct upstream_pool *pool, const char *host, cons
         idx = 0;
     }
 
-    strncpy(pool->entries[idx].host, host, sizeof(pool->entries[idx].host) - 1);
-    strncpy(pool->entries[idx].port, port, sizeof(pool->entries[idx].port) - 1);
+    snprintf(pool->entries[idx].host, sizeof(pool->entries[idx].host), "%s", host);
+    snprintf(pool->entries[idx].port, sizeof(pool->entries[idx].port), "%s", port);
     pool->entries[idx].upstream_fd = fd;
     pool->entries[idx].upstream_ssl = upstream_ssl;
     pool->entries[idx].last_used_ms = get_time_ms();

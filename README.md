@@ -1,5 +1,7 @@
 # Sankram (संक्रम) — High-Performance C Reverse Proxy & Dynamic Edge Gateway
 
+[![CI](https://github.com/MATRUNI/sankram/actions/workflows/ci.yml/badge.svg)](https://github.com/MATRUNI/sankram/actions/workflows/ci.yml)
+
 A lightweight, blazing-fast, and memory-efficient HTTP/HTTPS reverse proxy and dynamic edge gateway built from scratch in pure C. Designed to tackle extreme concurrency using a **Multi-Reactor Epoll/KQueue architecture**, an **asynchronous double-buffering logger**, and raw POSIX socket/TLS multiplexing with **zero external HTTP dependencies**.
 
 ---
